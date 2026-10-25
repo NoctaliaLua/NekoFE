@@ -2396,6 +2396,11 @@ local main=function()
 		if o.tail then
 			p.tail={ids={o.tail}}
 		end
+		if o.claws then
+			--the claws (F) are worn on the arms like a normal player would wear them (the same offset to the arm), moved 0.05 studs towards the torso and 0.45 down
+			p.claw1={ids={o.claws[1]},arm="Left Arm",armIn=0.05,gate="claws"}
+			p.claw2={ids={o.claws[2],o.claws[1]},arm="Right Arm",armIn=-0.05,gate="claws"}
+		end
 		return p
 	end
 
@@ -2484,6 +2489,21 @@ local main=function()
 				tail="132045119324387"
 			})
 		},
+		--the Original Neko button (only there while the Original Neko switch is on): the hats of transitioner 2 with other transition hats (torso, left arm, right arm),
+		--the claws (shown by F) and a new head/hair (119496092257224, in the list), hair = an extra asset id added to the list when it is set
+		originalneko={
+			label="Original Neko",
+			delay=TR_HATS_WAIT,
+			hair="",
+			hats="13389369769 13389369769 91640813666488 108531079594783 123177862030972 110680875226991 99950201919031 114914485544606 115215045434433 132367657204737 132367657204737 132367657204737 132367657204737 119496092257224 122144916481304 16930448372 16613831300 16613831300 132045119324387 10991697781",
+			rig=universalRig(),
+			pieces=universalPieces({
+				trans={"115215045434433","110680875226991","99950201919031"},
+				legs={"91640813666488","123177862030972"},
+				tail="132045119324387",
+				claws={"108531079594783","114914485544606"}
+			})
+		},
 		transitioner3={
 			label="Miku",
 			delay=TR_HATS_WAIT,
@@ -2507,7 +2527,7 @@ local main=function()
 			})
 		}
 	}
-	local PIECE_KEYS={"bow1","bow2","bowAcc1","bowAcc2","trans1","trans2","trans3","legAcc1","legAcc2","band","bandAcc","face1","face2","face3","face4","tail"}
+	local PIECE_KEYS={"bow1","bow2","bowAcc1","bowAcc2","trans1","trans2","trans3","legAcc1","legAcc2","claw1","claw2","band","bandAcc","face1","face2","face3","face4","tail"}
 	local BOW_TILT_X=0.3 --radians a bow tips forward/back per stud of bounce height
 	local BOW_TILT_Z=0.8 --radians a bow tilts sideways per stud of sideways swing
 	local BOW_BOUNCE=0.06--how hard a change of the body's up/down speed throws the bows (50 studs/s of speed lost = 3 studs/s of bow speed)
@@ -2524,7 +2544,7 @@ local main=function()
 	--the commands (-gh ids) a mode sends, 10 ids per command
 	local hatCommands=function(m)
 		if m.hats then
-			return gh(m.hats)
+			return gh(m.hats..((m.hair and m.hair~="") and (" "..m.hair) or ""))
 		end
 		return {(m.hats1:gsub("%s+",",")),(m.hats2:gsub("%s+",","))}
 	end
@@ -2707,6 +2727,7 @@ local main=function()
 	local menu=nil --the menu that is open right now (see the menu part at the end)
 	local DATA={
 		autoPd=false, --fire -pd too when reanimating
+		originalNeko=false, --the Original Neko hats (modeName originalneko) with the animations and keys of nekov4.lua instead of the emotes
 		binds={}, --custom command id -> name of the key
 		stats={reanimations=0,hats=0,usage=0} --usage is in seconds, all sessions together
 	}
@@ -2725,6 +2746,7 @@ local main=function()
 				local saved=HttpService:JSONDecode(readfile(SETTINGS_FILE))
 				if type(saved)=="table" then
 					DATA.autoPd=(saved.autoPd==true)
+					DATA.originalNeko=(saved.originalNeko==true)
 					if type(saved.topbar)=="table" and tonumber(saved.topbar.x) and tonumber(saved.topbar.y) then
 						DATA.topbar={x=tonumber(saved.topbar.x),y=tonumber(saved.topbar.y)}
 					end
@@ -2759,6 +2781,9 @@ local main=function()
 		end)
 	end
 	loadData()
+	if modeName=="originalneko" and not DATA.originalNeko then --its button is only there while the switch is on
+		setMode("animal")
+	end
 
 	--total time the script was used: what was saved plus this session
 	local sessionStart=osclock()
@@ -3239,6 +3264,325 @@ local main=function()
 	end
 
 	----------------------------------------------------------------------------
+	-- original neko (the Original Neko switch): the idle, walk (crawl with the claws), jump, fall, feet kick (R), giggle (T), the click combos and the
+	-- attack (Z) of nekov4.lua. everything is only for show, nothing is damaged. that script moved Welds with arm C1 = 0,0.5,0 and leg C1 = 0,1,0,
+	-- the joints of the engine have other C1s, so every old C0 is turned into the C0 that puts the limb in the same place.
+	-- n is the sine of the old script (it went up by `change` every 1/30 s)
+	----------------------------------------------------------------------------
+	poses.neko={} --not a local with its helpers in a do block: main is at the 200 locals a function can have
+	do
+		local nk=poses.neko
+		local NECK_N=cfMul(cf(0,1,0),ROOT_N)
+		local C1_RS=cfMul(cf(-0.5,0.5,0),RYp)
+		local C1_LS=cfMul(cf(0.5,0.5,0),RYn)
+		nk.JUMP_POWER=60 --jump power, walk speed and jump power with the claws (F) on
+		nk.CLAW_SPEED=22*1.6
+		nk.CLAW_JUMP=60*1.6
+		nk.HAPPY_TIME=1.4 --seconds T plays before it goes back to normal (the old script played it once)
+		local mul=function(a,...)
+			for k=1,select("#",...) do
+				a=cfMul(a,(select(k,...)))
+			end
+			return a
+		end
+		local deg=function(x,y,z) return angles(rad(x),rad(y),rad(z)) end
+		local oldArm=function(side,c0)
+			return cfMul(cfMul(c0,cf(0,-0.5,0)),(side==1) and C1_RS or C1_LS)
+		end
+		--rY/up = the same ground and landing corrections the normal idle has
+		local oldLeg=function(side,c0,rY,up)
+			return cfMul(cf(0,rY-up,-0.5*rY),cfMul(cfMul(c0,cf(0,-1,0)),(side==1) and C1_RH or C1_LH))
+		end
+		--root and neck are what the old script multiplied with RootCF / NeckCF, the arms and legs are the whole old C0
+		nk.pose=function(root,neck,rs,ls,rh,lh,rY,lY,up)
+			rY=rY or 0
+			lY=lY or 0
+			up=up or 0
+			return {
+				root=cfMul(cf(0,up,0),cfMul(ROOT_N,root)),
+				neck=cfMul(NECK_N,neck),
+				rs=oldArm(1,rs),
+				ls=oldArm(-1,ls),
+				rh=oldLeg(1,rh,rY,up),
+				lh=oldLeg(-1,lh,lY,up)
+			}
+		end
+		local P=nk.pose
+
+		--a sound only you hear (the old script put them in the body parts)
+		nk.sound=function(id,vol,pitch)
+			pcall(function()
+				local s=i("Sound")
+				s.SoundId="rbxassetid://"..id
+				s.Volume=vol
+				s.PlaybackSpeed=pitch or 1
+				s.Parent=FindFirstChildOfClass(game,"SoundService")
+				s:Play()
+				tdelay(6,function()
+					pcall(Destroy,s)
+				end)
+			end)
+		end
+
+		--the notifications of Notify.lua (a black bar slides in from the left, the icon turns around, the older ones move down)
+		local notifyGui=nil
+		nk.notify=function(text,duration)
+			duration=duration or 3
+			tspawn(function()
+				if not alive then
+					return
+				end
+				if (not notifyGui) or (not notifyGui.Parent) then
+					notifyGui=newGui(2147483600)
+				end
+				for idx,v in next,GetChildren(notifyGui) do
+					tween(v,{Position=u2(0,0,0.1,idx*v.AbsoluteSize.Y*1.2)},0.5)
+				end
+				local msg=mk("Frame",{Name=rs(),BackgroundColor3=c3(0,0,0),BackgroundTransparency=0.3,BorderSizePixel=0,Position=u2(-1,0,0.1,0),Size=u2(0,420,0,70)},notifyGui)
+				mk("UIAspectRatioConstraint",{AspectRatio=6},msg)
+				mk("TextLabel",{Name=rs(),AnchorPoint=v2(0,0.5),BackgroundTransparency=1,Position=u2(0.2,-8,0.5,0),Size=u2(0.8,0,1,0),Font=e.Font.Gotham,Text=text,TextColor3=c3(1,1,1),TextScaled=true,TextWrapped=true,TextXAlignment=e.TextXAlignment.Left},msg)
+				local icon=mk("ImageLabel",{Name=rs(),AnchorPoint=v2(0,0.5),BackgroundTransparency=1,Position=u2(0,8,0.5,0),Size=u2(0.2,-16,1,-16),Image="rbxasset://textures/ui/Emotes/ErrorIcon.png",Rotation=180},msg)
+				tween(msg,{Position=u2(0,0,0,msg.AbsolutePosition.Y)},1)
+				twait(0.6)
+				tween(icon,{Rotation=0},1)
+				twait(0.4+duration)
+				tween(msg,{Position=u2(-1,0,0,msg.AbsolutePosition.Y)},1,e.EasingStyle.Quad,e.EasingDirection.In)
+				twait(1)
+				pcall(Destroy,msg)
+			end)
+		end
+
+		nk.idle=function(n,claws,rY,lY,up)
+			local c,s=cos(n/8),sin(n/8)
+			if claws then
+				return P(
+					mul(cf(0,0,-0.1+0.0395*c),deg(10.5-c,0,-5)),
+					deg(-6.5-3.5*s,2.5-5.5*cos(n/16),5-6.5*cos(n/15+0.4*cos(n/10))),
+					mul(cf(1.45,0.5,0),deg(10+3*s,25,40+4*c)),
+					mul(cf(-1.45,0.5,0),deg(10+3*s,-25,-40-4*c)),
+					mul(cf(0.5,-0.95-0.04*c,0),deg(20.5-c,0,2.5)),
+					mul(cf(-0.5,-0.95-0.04*c,0),deg(1.5-c,20,-2.5)),
+					rY,lY,up)
+			end
+			return P(
+				mul(cf(0,0,-0.1+0.0395*c),deg(1.5-c,0,-20)),
+				deg(6.5-3.5*s,2.5-5.5*cos(n/16),20-6.5*cos(n/15+0.4*cos(n/10))),
+				mul(cf(1.45,0.5,0),deg(3*s,-5,4+4*c)),
+				mul(cf(-1.45,0.5,0),deg(3*s,5,-4-4*c)),
+				mul(cf(0.5,-0.95-0.04*c,0),deg(1.5-c,0,2.5)),
+				mul(cf(-0.5,-0.95-0.04*c,0),deg(1.5-c,20,-2.5)),
+				rY,lY,up)
+		end
+		--fw / rt = how much you walk forward / to the right (-1 to 1)
+		nk.walk=function(n,claws,fw,rt,rY,lY,up)
+			local c,s=cos(n/8),sin(n/8)
+			local c4,s4=cos(n/4),sin(n/4)
+			if claws then --on all fours
+				local rh2=mul(cf(-rt/7*c,0,fw/7*c),angles(rad(fw*89)*c,rad(-rt*55/2*c),rad(rt*55*c)))
+				local lh2=mul(cf(rt/7*s,0,-fw/7*c),angles(rad(fw*89)*c,rad(rt*55/2*s),rad(-rt*55*s)))
+				return P(
+					mul(cf(rt*s,fw*s,-0.5-0.255*c-s/8),deg(85+fw*c*20,-rt*c4,-rt*c*10)),
+					mul(cf(0,0,0.025*c4),deg(-20+(-fw+fw*c4)*5,(rt*2-rt*c4)*3.5,-rt*45-8*c)),
+					mul(cf(1,0.5-fw*0.5*s,-0.4),deg(95-fw*75*s,0,-8-rt*55*s+10*c)),
+					mul(cf(-1,0.5-fw*0.5*s,-0.4),deg(95-fw*75*s,0,8+rt*55*c-10*c)),
+					mul(cf(0.5,-0.85-0.25*s,-0.15-0.25*s),rh2,deg(60-5*c,0,-2.5)),
+					mul(cf(-0.5,-0.85-0.25*s,-0.15-0.25*s),lh2,deg(60-5*s,0,2.5)),
+					rY,lY,up)
+			end
+			local rh2=mul(cf(-rt/7*c,0,fw/7*c),deg(-fw*30*c,0,-rt*30*c))
+			local lh2=mul(cf(rt/7*c,0,-fw/7*c),deg(fw*30*c,0,rt*30*c))
+			return P(
+				mul(cf(0,0,-0.05+0.055*c4-s4/8),deg((fw*2-fw*c4)*7,(-rt*2+rt*c4)*5,8*c)),
+				mul(cf(0,0,0.025*c4),deg((-fw+fw*c4)*7,(rt*2-rt*c4)*3.5,-rt*45-8*c)),
+				mul(cf(1.45,0.5+rt/50*c,0),deg(fw*15*c,0,8+rt*5*c)),
+				mul(cf(-1.45,0.5+rt/50*c,0),deg(-fw*15*c,0,-8-rt*5*c)),
+				mul(cf(0.5,-0.85+0.15*s,-0.15+0.15*c),rh2,deg(-5*c,0,2.5)),
+				mul(cf(-0.5,-0.85-0.15*s,-0.15-0.15*c),lh2,deg(5*c,0,-2.5)),
+				rY,lY,up)
+		end
+		nk.jump=function(n,fw,rt)
+			local c=cos(n/8)
+			local air=min(sqrt(fw*fw+rt*rt),1)/25 --how much the speed leans the body in the air (the old inairvel)
+			return P(
+				mul(cf(0,0.01975*c,-0.1+0.0395*c),angles(rad(-6.5-1.5*c)+air*fw/2,-air*rt/2,0)),
+				deg(-26.5+2.5*c,0,0),
+				mul(cf(1.45,0.5,0),deg(140-2*c,-5,8+4*c)),
+				mul(cf(-1.45,0.5,0),deg(140-2*c,5,-8-4*c)),
+				mul(cf(0.5,-0.85+0.05*cos(n/15),-0.2),deg(-15-cos(n/10),0,0)),
+				mul(cf(-0.5,-0.35+0.05*cos(n/15),-0.4),deg(-25+cos(n/10),0,0)))
+		end
+		nk.fall=function(n,fw,rt)
+			local c=cos(n/8)
+			local air=min(sqrt(fw*fw+rt*rt),1)/25
+			return P(
+				mul(cf(0,0.01975*c,-0.5+0.0395*c),angles(rad(5.5-1.5*c)-air*fw/2,air*rt/2,0)),
+				deg(26.5+2.5*c,0,0),
+				mul(cf(1.45,0.5,0),deg(105-2*c,-15,80+4*c)),
+				mul(cf(-1.45,0.5,0),deg(105-2*c,15,-80-4*c)),
+				mul(cf(0.5,-0.15+0.05*cos(n/15),-0.4),deg(-15-cos(n/10),0,0)),
+				mul(cf(-0.5,-0.55+0.05*cos(n/15),-0.4),deg(cos(n/10),0,0)))
+		end
+		--R: the feet kick, lying on the belly and kicking
+		nk.lay=function(n)
+			local c=cos(n/8)
+			return P(
+				mul(cf(0,0,-2.2),deg(75,5*c,5*c)),
+				deg(-40,15*sin(n/8),0),
+				mul(cf(1,0.5,-0.4),deg(160,5*c,-50+5*c)),
+				mul(cf(-1,0.5,-0.4),deg(160,5*c,40+5*c)),
+				mul(cf(0.5,-0.9-0.1*c,-0.4+0.4*c),deg(-50+35*c,5*c,-15*c)),
+				mul(cf(-0.5,-0.9+0.1*c,-0.4-0.4*c),deg(-50-35*c,5*c,-15*c)))
+		end
+		--T: the giggle, head tilted and the right arm up
+		nk.happy=function(n)
+			local c=cos(n/8)
+			return P(
+				mul(cf(0,0,-0.1-0.05*c),deg(1+c,0,30+c)),
+				deg(0,0,-30+c),
+				mul(cf(1.3,0.5,0),deg(120,0,-40)),
+				cf(-1.5,0.5,0),
+				mul(cf(0.5,-0.95+0.05*c,-0.2+0.05*c),deg(-10+c,25*cos(n/16),0)),
+				mul(cf(-0.5,-0.95+0.05*c,0),deg(1+c,0,0)))
+		end
+
+		--the click combo: 1 to 3 without the claws, 4 to 7 with them. a segment is held for dur seconds (pose can also be a function of how far the segment is, 0 to 1),
+		--k = how fast the joints follow it. snds = {at (seconds), id, vol, pitch (a number or a function)}
+		local seg=function(dur,pose,k)
+			return {dur=dur,pose=pose,k=k or 4}
+		end
+		local R1,L1=cf(1.5,0.5,0),cf(-1.5,0.5,0)
+		local ATTACKS={
+			{
+				segs={
+					seg(0.2,P(deg(20,0,-40),deg(0,0,40),mul(R1,deg(30,0,0)),mul(L1,deg(30,0,0)),mul(cf(0.5,-0.6,-0.4),deg(-20,0,0)),mul(cf(-0.5,-1,0),deg(20,0,20)))),
+					seg(0.2,P(mul(cf(0,-1,0),deg(-40,0,40)),deg(0,0,-40),mul(R1,deg(-30,0,0)),mul(L1,deg(-30,0,0)),mul(cf(0.5,-1,0),deg(120,0,0)),mul(cf(-0.5,-1,0),deg(-60,0,-20))))
+				}
+			},
+			{
+				segs={
+					seg(0.2,P(deg(-20,0,60),deg(0,0,-60),R1,mul(L1,deg(90,0,0)),mul(cf(0.5,-0.5,-0.4),deg(-20,0,0)),mul(cf(-0.5,-1,0),deg(-20,0,0)))),
+					seg(0.2,P(mul(cf(0,-1,0),deg(0,0,-70)),deg(0,0,70),R1,mul(L1,deg(0,-20,-90)),mul(cf(0.5,-1,0),deg(20,0,0)),mul(cf(-0.5,-1,0),deg(-20,0,0))))
+				}
+			},
+			{
+				segs={
+					seg(0.2,P(deg(-20,0,120),deg(0,0,-80),mul(R1,deg(90,0,20)),mul(L1,deg(20,0,0)),mul(cf(0.5,-1,0),deg(-20,0,0)),mul(cf(-0.5,-0.8,0),deg(20,0,0)))),
+					seg(0.2,P(mul(cf(0,-1,0),deg(20,0,0)),cf_0,mul(R1,deg(0,0,90)),mul(L1,deg(20,0,0)),mul(cf(0.5,-1,0),deg(-40,0,0)),cf(-0.5,-1,0)))
+				}
+			},
+			{
+				snds={{at=0,id="3051417237",vol=3,pitch=function() return mrandom(100,155)/100 end}},
+				segs={
+					seg(0.2,P(deg(-20,0,-80),deg(20,0,80),R1,mul(L1,deg(-20,-70,-90)),mul(cf(0.5,-1,0),deg(20,0,0)),mul(cf(-0.5,-0.5,-0.4),deg(20,0,0)))),
+					seg(0.2,P(mul(cf(0,-1,0),deg(20,0,45)),deg(-20,0,-45),R1,mul(L1,deg(0,0,-90)),mul(cf(0.5,-1,0),deg(20,0,0)),mul(cf(-0.5,-1,0),deg(-10,0,0))))
+				}
+			},
+			{
+				snds={{at=0,id="3051417237",vol=3,pitch=function() return mrandom(100,155)/80 end}},
+				segs={
+					seg(0.2,P(deg(-20,0,80),deg(20,0,-80),mul(R1,deg(-20,70,90)),mul(L1,deg(0,0,-90)),mul(cf(0.5,-0.5,-0.4),deg(20,0,0)),mul(cf(-0.5,-1,0),deg(20,0,0)))),
+					seg(0.2,P(mul(cf(0,-1,0),deg(20,0,-45)),deg(-20,0,45),mul(R1,deg(0,0,90)),L1,mul(cf(0.5,-1,0),deg(-10,0,0)),mul(cf(-0.5,-1,0),deg(20,0,0))))
+				}
+			},
+			{
+				snds={{at=0,id="3051417237",vol=3,pitch=function() return mrandom(140,185)/80 end}},
+				segs={
+					seg(0.175,P(mul(cf(0,-1,-0.3),deg(45,0,0)),deg(-20,0,0),mul(cf(1.1,0.5,-0.3),deg(20,115,90)),mul(cf(-1.1,0.5,-0.3),deg(20,-115,-90)),mul(cf(0.5,-1,0),deg(-60,0,0)),mul(cf(-0.5,-1,0),deg(60,0,0))),5),
+					seg(0.2,P(mul(cf(0,-1.7,-0.4),deg(45,0,0)),cf_0,mul(R1,deg(0,0,90)),mul(L1,deg(0,0,-90)),cf(0.5,-1,0),mul(cf(-0.5,-1,0),deg(65,0,0))))
+				}
+			},
+			{
+				snds={{at=0,id="3051417237",vol=3,pitch=0.8},{at=0.1,id="3051417087",vol=3,pitch=function() return mrandom(100,155)/100 end},{at=0.2,id="3051417087",vol=3,pitch=function() return mrandom(100,155)/100 end}},
+				segs={
+					seg(10/30,function(f)
+						local i=1+9*f --the old loop went from 1 to 10
+						return P(mul(cf(0,-1.7+0.17*i,-0.4),deg(25-5*i,0,36*i)),cf_0,mul(R1,deg(180,0,90)),mul(L1,deg(0,0,-90)),mul(cf(0.5,-1,0),deg(-25,0,0)),mul(cf(-0.5,-1,0),deg(25,0,0)))
+					end,5)
+				}
+			}
+		}
+		--returns a function of the seconds since the attack began: the pose and k, nil when it is over
+		nk.attack=function(n)
+			local atk=ATTACKS[n]
+			local total=0
+			for _,s in next,atk.segs do
+				total=total+s.dur
+			end
+			local fired={}
+			return function(el)
+				if el>=total then
+					return nil
+				end
+				for k,sn in next,(atk.snds or {}) do
+					if (not fired[k]) and el>=sn.at then
+						fired[k]=true
+						local pitch=sn.pitch
+						nk.sound(sn.id,sn.vol,(type(pitch)=="function") and pitch() or pitch)
+					end
+				end
+				local at=0
+				for _,s in next,atk.segs do
+					if el<at+s.dur then
+						local pose=s.pose
+						if type(pose)=="function" then
+							pose=pose((el-at)/s.dur)
+						end
+						return pose,s.k
+					end
+					at=at+s.dur
+				end
+				return nil
+			end
+		end
+
+		--Z: first the wind up, if somebody is standing in front of you (checked by the script, 0.2 to 0.7 s) the whole move plays,
+		--otherwise it ends after 0.7 s. nobody is grabbed or damaged
+		nk.Z_CHECK0,nk.Z_CHECK1=0.2,0.7
+		nk.zWind=P(deg(20,0,-20),deg(0,0,20),mul(R1,deg(-10,0,20)),mul(L1,deg(0,0,-20)),mul(cf(0.5,-1,0),deg(-20,0,0)),mul(cf(-0.5,-1,0),deg(20,0,0)))
+		local Z_SPIN,Z_HANG,Z_DIVE,Z_SLAM,Z_REC=0.77,0.1,0.23,0.3,0.23
+		local zHang=P(deg(-65,0,0),deg(65,0,0),mul(R1,deg(90,0,90)),mul(L1,deg(90,0,-90)),mul(cf(0.5,-0.7,-0.2),deg(-40,0,0)),mul(cf(-0.5,-1,0),deg(-30,0,0)))
+		local zSlam=P(mul(cf(0,0,-0.5),deg(85,0,0)),deg(-65,0,0),mul(R1,deg(130,0,0)),mul(L1,deg(130,0,0)),mul(cf(0.5,-1,0),deg(-25,0,0)),mul(cf(-0.5,-1,0),deg(-25,0,0)))
+		local zRec=P(cf_0,deg(35,0,0),mul(R1,deg(30,0,30)),mul(L1,deg(30,0,-30)),mul(cf(0.5,-1,0),deg(10,0,0)),mul(cf(-0.5,-1,0),deg(-10,0,0)))
+		--el = seconds since the target was found, returns the pose and k, nil when it is over
+		nk.zHit=function(el)
+			if el<Z_SPIN then
+				local i=1+8.8*el/Z_SPIN --the old loop went from 1 to 10
+				return P(
+					mul(cf(-0.5*sin(i),0.5*cos(i),0),deg(25-4.5*i,0,72*i)),
+					deg(20,0,-80),
+					mul(cf(1.5,0.65,0),deg(160+2*i,0,30-3*i)),
+					L1,
+					mul(cf(0.5,-1,0),deg(6.5*i,0,0)),
+					mul(cf(-0.5,-1,0),deg(-6.5*i,0,0))),3
+			end
+			el=el-Z_SPIN
+			if el<Z_HANG then
+				return zHang,3
+			end
+			el=el-Z_HANG
+			if el<Z_DIVE then
+				local i=1+1.35*el/Z_DIVE
+				return P(
+					mul(cf(0,2-0.75*i,20-1.8*i),deg(15+60*i,0,0)),
+					deg(-25,0,0),
+					mul(R1,deg(170,0,90-45*i)),
+					mul(L1,deg(170,0,-90+45*i)),
+					mul(cf(0.5,-1,0),deg(40,0,0)),
+					mul(cf(-0.5,-1,0),deg(40,0,0))),3
+			end
+			el=el-Z_DIVE
+			if el<Z_SLAM then
+				return zSlam,3
+			end
+			el=el-Z_SLAM
+			if el<Z_REC then
+				return zRec,3
+			end
+			return nil
+		end
+	end
+
+	----------------------------------------------------------------------------
 	-- reanimate
 	----------------------------------------------------------------------------
 	local startReanimate=function()
@@ -3302,7 +3646,11 @@ local main=function()
 			local rootP=virtual("HumanoidRootPart")
 			local torsoP=virtual("Torso")
 			local legPs={["Right Leg"]=virtual("Right Leg"),["Left Leg"]=virtual("Left Leg")}
+			local armPs={["Right Arm"]=virtual("Right Arm"),["Left Arm"]=virtual("Left Arm")}
 
+			--Original Neko: the hats of its button with the animations of nekov4.lua, the emotes, Q and R are gone and K / L become V / C
+			local nk=poses.neko
+			local nekoOn=DATA.originalNeko and (modeName=="originalneko")
 			local S={ --everything that changes while you play
 				face=1,faceKey="face1",
 				clickTp=false, --R: left click teleports you to the mouse
@@ -3317,7 +3665,10 @@ local main=function()
 				changer=false,kW=0,
 				transition=false,tr=0,trTick=-1,bandW=0,
 				--debug: the offsets added to a piece by the G and H keys (torso space)
-				nudge={bowAcc1=v3_0,bowAcc2=v3_0,bandAcc=v3_0}
+				nudge={bowAcc1=v3_0,bowAcc2=v3_0,bandAcc=v3_0},
+				--original neko: nSine/nChange = the sine of the old script and how fast it goes, claws = F, act = the pose function of an attack while it plays,
+				--tUntil = when T ends, hold = the left mouse button is down, combo = the next click attack, inAir = jumping or falling (no click attacks)
+				nSine=0,nChange=1.05,claws=false,act=nil,tUntil=0,hold=false,combo=0,inAir=false
 			}
 
 			----------------------------------------------------------------
@@ -3373,18 +3724,157 @@ local main=function()
 					RightHip.C0 = Lerp(RightHip.C0,cfMul(cf(1, -1, 0),angles(1.5707963267948966 - 0.08726646259971647 * sin((sine + 0.5) * 4), 1.6580627893946132 - 0.06981317007977318 * sin((sine + 0.25) * 4), -1.5707963267948966)),deltaTime) 
 				end
 			}
-			addmode("default",{
+			--neko animations (see nk): a pose is smoothed into the joints like everywhere else, while Z plays its own poses take over
+			local nApply=function(p,k)
+				local act=S.act
+				if act then
+					local ap,ak=act()
+					if ap then
+						p,k=ap,ak
+					else
+						S.act=nil
+					end
+				end
+				local a=min((k or 1)*deltaTime,1)
+				RootJoint.C0=Lerp(RootJoint.C0,p.root,a)
+				Neck.C0=Lerp(Neck.C0,p.neck,a)
+				RightShoulder.C0=Lerp(RightShoulder.C0,p.rs,a)
+				LeftShoulder.C0=Lerp(LeftShoulder.C0,p.ls,a)
+				RightHip.C0=Lerp(RightHip.C0,p.rh,a)
+				LeftHip.C0=Lerp(LeftHip.C0,p.lh,a)
+			end
+			local nekoSpeed=function()
+				setWalkSpeed(S.claws and nk.CLAW_SPEED or WALK_SPEED)
+				t.setJumpPower(S.claws and nk.CLAW_JUMP or nk.JUMP_POWER)
+			end
+			--is somebody standing in the box in front of you (the old script used a part that touched a humanoid)
+			local zTargetAhead=function()
+				local ok,found=pcall(function()
+					local op=OverlapParams.new()
+					op.FilterType=e.RaycastFilterType.Exclude
+					op.FilterDescendantsInstances={insGet(lp,"Character")}
+					for _,part in next,ws:GetPartBoundsInBox(cfMul(t.getCfr(),cf(0,0,-3)),v3(2.5,4,2.5),op) do
+						local m=part.Parent
+						if m and FindFirstChildOfClass(m,"Humanoid") and m:FindFirstChild("Head") and (m:FindFirstChild("Torso") or m:FindFirstChild("UpperTorso")) then
+							return true
+						end
+					end
+					return false
+				end)
+				return ok and found
+			end
+			--Z: the body is locked (like the old script, walk speed 0.1 and no jump) until the attack is over
+			local nekoAttackZ=function()
+				local t0=sine
+				local hitAt=nil
+				setWalkSpeed(0.1)
+				t.setJumpPower(0)
+				nk.sound("299058146",2,2.5)
+				S.act=function()
+					local el=sine-t0
+					if not hitAt then
+						if el>=nk.Z_CHECK1 then
+							nekoSpeed()
+							return nil
+						end
+						if el>=nk.Z_CHECK0 and zTargetAhead() then
+							hitAt=el
+							nk.sound("231917750",2,0.9)
+						end
+						return nk.zWind,2
+					end
+					local p,k=nk.zHit(el-hitAt)
+					if not p then
+						nekoSpeed()
+					end
+					return p,k
+				end
+			end
+			--the left mouse button: the next attack of the click combo (1 to 3, with the claws 4 to 7), not in the air
+			local nekoCombo=function()
+				local atk
+				if S.claws then
+					atk=4+S.combo
+					S.combo=(S.combo+1)%4
+				else
+					local step=(S.combo>2) and 0 or S.combo
+					atk=1+step
+					S.combo=(step+1)%3
+				end
+				local t0=sine
+				local play=nk.attack(atk)
+				S.act=function()
+					return play(sine-t0)
+				end
+			end
+			local nekoAnim={
+				idle=function()
+					local rY,lY=raycastlegs()
+					S.inAir=false
+					S.nChange=1.05
+					nApply(nk.idle(S.nSine,S.claws,rY,lY,velYchg()/20))
+				end,
+				walk=function()
+					local Vfw,Vrt=velbycfrvec()
+					local rY,lY=raycastlegs()
+					S.inAir=false
+					S.nChange=S.claws and 4 or 2.4
+					nApply(nk.walk(S.nSine,S.claws,Vfw,Vrt,rY,lY,velYchg()/20),2.5)
+				end,
+				jump=function()
+					velYchg()
+					local Vfw,Vrt=velbycfrvec()
+					S.inAir=true
+					S.nChange=1.2
+					nApply(nk.jump(S.nSine,Vfw,Vrt),2)
+				end,
+				fall=function()
+					velYchg()
+					local Vfw,Vrt=velbycfrvec()
+					S.inAir=true
+					S.nChange=1.2
+					nApply(nk.fall(S.nSine,Vfw,Vrt),2)
+				end
+			}
+			addmode("default",nekoOn and nekoAnim or {
 				idle=baseAnim.idle,
 				walk=baseAnim.walk,
 				jump=baseAnim.jump,
 				fall=baseAnim.fall
 			})
+			--the emotes are not there with Original Neko, R (feet kick) and T (giggle) are the ones of nekov4.lua instead
+			local addEmote=nekoOn and emptyfunction or addmode
+			if nekoOn then
+				addmode("r", {
+					idle = function()
+						velYchg()
+						S.nChange=1.05
+						nApply(nk.lay(S.nSine))
+					end
+				})
+				addmode("t", {
+					modeEntered = function()
+						S.tUntil=sine+nk.HAPPY_TIME
+						tdelay(0.3,function()
+							nk.sound("875978120",4,0.9)
+						end)
+					end,
+					idle = function()
+						velYchg()
+						S.nChange=4.3
+						nApply(nk.happy(S.nSine))
+						if sine>S.tUntil then
+							t.resetmode()
+						end
+					end
+				})
+			end
 
 			----------------------------------------------------------------
 			-- emotes. Z lay down, X sit, C cute sit, B wave, N silly dance, M sit hug, T bow fix, Y exhausted, U tired fall
 			-- pressing the key again goes back to the normal mode, walking also gets you out of them (only idle is defined)
 			----------------------------------------------------------------
-			addmode("z", {
+			addEmote("z", {
 				idle = function()
 					velYchg()
 					LeftShoulder.C0 = Lerp(LeftShoulder.C0,cfMul(cf(-1+armIn, 0.75, -0.2),angles(2.705260340591211 - 0.08726646259971647 * sin((sine + 0.1) * 2), -2.792526803190927, -0.6981317007977318)),deltaTime) 
@@ -3395,7 +3885,7 @@ local main=function()
 					LeftHip.C0 = Lerp(LeftHip.C0,cfMul(cf(-1, -1, 0),angles(1.5707963267948966 - 0.03490658503988659 * sin(sine * 2), -1.3089969389957472, 1.5707963267948966)),deltaTime) 
 				end
 			})
-			addmode("x", {
+			addEmote("x", {
 				idle = function()
 					velYchg()
 					LeftShoulder.C0 = Lerp(LeftShoulder.C0,cfMul(cf(-0.9+armIn, 0.4 + 0.1 * sin(sine * 2), 0.3 - 0.15 * sin(sine * 2)),angles(-1.0471975511965976 - 0.12217304763960307 * sin(sine * 2), -1.3962634015954636, -0.6981317007977318)),deltaTime) 
@@ -3406,7 +3896,7 @@ local main=function()
 					LeftHip.C0 = Lerp(LeftHip.C0,cfMul(cf(-1, -0.75 + 0.1 * sin((sine + 0.2) * 2), -0.5),angles(1.3962634015954636 - 0.03490658503988659 * sin(sine * 2), -1.6580627893946132, 0)),deltaTime) 
 				end
 			})
-			addmode("b", {
+			addEmote("b", {
 				idle = function()
 					local Ychg=velYchg()/20
 					LeftShoulder.C0 = Lerp(LeftShoulder.C0,cfMul(cf(-1+armIn, 0.5, 0),angles(1.5707963267948966, -1.6580627893946132 + 0.08726646259971647 * sin((sine - 0.3) * 4), 1.5707963267948966)),deltaTime) 
@@ -3417,7 +3907,7 @@ local main=function()
 					LeftHip.C0 = Lerp(LeftHip.C0,cfMul(cf(-1 - 0.02 * sin(sine * 4), -0.925 - 0.07 * sin(sine * 4)-Ychg, 0),angles(1.5707963267948966, -1.7453292519943295 + 0.08726646259971647 * sin(sine * 4), 1.5707963267948966)),deltaTime) 
 				end
 			})
-			addmode("n", {
+			addEmote("n", {
 				idle = function()
 					local Ychg=velYchg()/20
 					Neck.C0 = Lerp(Neck.C0,cfMul(cf(0, 1, 0),angles(-1.5707963267948966, -0.4363323129985824 * sin(sine * 8), -3.141592653589793)),deltaTime) 
@@ -3428,20 +3918,20 @@ local main=function()
 					LeftHip.C0 = Lerp(LeftHip.C0,cfMul(cf(-1, -1 - 0.3 * sin(sine * 8)-Ychg, 0),angles(1.5707963267948966, -1.5707963267948966 + 0.5235987755982988 * sin(sine * 8), 1.5707963267948966)),deltaTime) 
 				end
 			})
-			addmode("c", {
+			addEmote("c", {
 				idle = function()
 					velYchg()
 					apply(poses.cuteSit(sine))
 				end
 			})
-			addmode("m", {
+			addEmote("m", {
 				idle = function()
 					velYchg()
 					apply(poses.sitHug(sine))
 				end
 			})
 			--T: bow fix, plays until T is pressed again (or Q, walking also ends it)
-			addmode("t", {
+			addEmote("t", {
 				modeEntered = function()
 					S.bowFix = true
 				end,
@@ -3454,14 +3944,14 @@ local main=function()
 				end
 			})
 			--Y: exhausted
-			addmode("y", {
+			addEmote("y", {
 				idle = function()
 					velYchg()
 					apply(poses.exhausted())
 				end
 			})
 			--U: tired fall
-			addmode("u", {
+			addEmote("u", {
 				idle = function()
 					velYchg()
 					apply(poses.tiredFall(sine))
@@ -3675,6 +4165,10 @@ local main=function()
 				--they get thrown the other way and swing down, up, down (lower), up (lower)... until they settle
 				local dt=min(sine-S.lastT,0.05)
 				S.lastT=sine
+				S.nSine=S.nSine+S.nChange*30*dt --the old script went up by `change` 30 times per second
+				if nekoOn and S.hold and (not S.act) and (not S.inAir) and (not menuUnlock) then --holding the left mouse button keeps the combo going
+					nekoCombo()
+				end
 				local yv=t.getYvel()
 				local dv=yv-S.lastYv
 				S.lastYv=yv
@@ -3723,6 +4217,8 @@ local main=function()
 						vis=S.bandW
 					elseif gate=="trans" then
 						vis=1-S.kW
+					elseif gate=="claws" then
+						vis=S.claws and 1 or 0
 					end
 					if vis<=0.001 then
 						j.Part1=rootP
@@ -3782,6 +4278,11 @@ local main=function()
 							local shift=piece.legShift or v3_0
 							j.C1=cfMul(cfMul(cf(v3Get(shift,"X"),-legDrop+(piece.legUp or 0),v3Get(shift,"Z")),ry(piece.legFlip or 0)),h.C1)
 						end
+					elseif piece.arm then
+						--the claws (F): on the arm in the place a normal player would wear them, piece.armIn studs towards the torso and 0.45 studs down
+						j.Part1=armPs[piece.arm] or h.Part1
+						j.C0=h.C0
+						j.C1=cfMul(cfMul(cf(piece.armIn,-0.45,0),ry(pi)),h.C1) --turned 180 degrees around the arm so they sit on the outer side of the hand and face away from the torso
 					elseif gate=="trans" then
 						--where the accessory normally sits, sinking under the map while K is on
 						j.Part1=h.Part1
@@ -3809,6 +4310,9 @@ local main=function()
 			-- keys
 			----------------------------------------------------------------
 			local FACE_KEY={One=1,Two=2,Three=3,Four=4}
+			--with the neko animations the changer is V and the transitioner is C (K and L do nothing), F / Z are the claws and the uppercut
+			local changerKey=nekoOn and "V" or "K"
+			local transKey=nekoOn and "C" or "L"
 			tinsert(cons,Connect(insGet(uis,"InputBegan"),function(inp,processed)
 				if insGet(gs,"MenuIsOpen") or GetFocusedTextBox(uis) then
 					return
@@ -3820,17 +4324,29 @@ local main=function()
 						S.face=face
 						S.faceKey="face"..face
 					end
-				elseif name=="Q" then
+				elseif name=="Q" and not nekoOn then
 					setWalkSpeed(WALK_SPEED)
 					t.resetmode()
-				elseif name=="R" then
+				elseif name=="R" and not nekoOn then
 					--R: click teleport on and off (the click is handled below)
 					S.clickTp=not S.clickTp
-				elseif PIECES.bowAcc1 and name=="K" then
+				elseif nekoOn and name=="F" then
+					--F: the claws (they come out of the hands, the click attacks change), you walk faster and jump higher with them. nothing happens while an attack plays
+					if not S.act then
+						S.claws=not S.claws
+						nekoSpeed()
+						nk.sound(S.claws and "3051417649" or "3051417791",1.5,0.8)
+						nk.notify(S.claws and "Claws: ON" or "Claws: OFF")
+					end
+				elseif nekoOn and name=="Z" then
+					if not S.act then
+						nekoAttackZ()
+					end
+				elseif PIECES.bowAcc1 and name==changerKey then
 					--K: the changer, on and off. the bows and their accessories come up, the transition hats go under the map
 					S.changer=not S.changer
 					smokeTorso()
-				elseif PIECES.bowAcc1 and name=="L" then
+				elseif PIECES.bowAcc1 and name==transKey then
 					--L: the transitioner, on and off (off is instant: the leg accessories are back on the legs and the band is gone)
 					S.transition=not S.transition
 					S.tr=0
@@ -3840,6 +4356,20 @@ local main=function()
 					end
 				end
 			end))
+
+			--Original Neko: the left mouse button starts the click combo (frame() keeps it going while the button is held)
+			if nekoOn then
+				tinsert(cons,Connect(insGet(uis,"InputBegan"),function(inp,processed)
+					if (not processed) and (insGet(inp,"UserInputType")==e.UserInputType.MouseButton1) then
+						S.hold=true
+					end
+				end))
+				tinsert(cons,Connect(insGet(uis,"InputEnded"),function(inp)
+					if insGet(inp,"UserInputType")==e.UserInputType.MouseButton1 then
+						S.hold=false
+					end
+				end))
+			end
 
 			--click teleport (R): left click puts the root part where the mouse points at (the camera moves with it), clicks on the sky do nothing
 			tinsert(cons,Connect(insGet(uis,"InputBegan"),function(inp,processed)
@@ -3867,6 +4397,9 @@ local main=function()
 			t.setHooks({frame=frame,onLost=sendNet})
 			tdelay(0.3,sendNet)
 			setWalkSpeed(WALK_SPEED)
+			if nekoOn then
+				t.setJumpPower(nk.JUMP_POWER)
+			end
 
 			RT={t=t,S=S,cleanup=clearSmokes}
 			DATA.stats.reanimations=DATA.stats.reanimations+1
@@ -3943,7 +4476,7 @@ local main=function()
 				DATA.binds[cap.cmd.id]=nil
 				saveData()
 			else
-				local taken=RESERVED[key]
+				local taken=RESERVED[key] or (DATA.originalNeko and (key=="F" or key=="V")) --F and V are used by the neko animations
 				for _,other in next,CUSTOM do
 					if other.id~=cap.cmd.id and DATA.binds[other.id]==key then
 						taken=true
@@ -4278,15 +4811,18 @@ local main=function()
 		local hatsPanel=mk("Frame",{Name=rs(),Size=u2(1,0,1,0),BackgroundTransparency=1,BorderSizePixel=0,Visible=false},group)
 		panels.hats=hatsPanel
 		--the two columns are in the middle of the screen (x is the distance from the middle, the tallest column is 5 buttons)
-		local hatColumn=function(x,title,list)
+		--og = the Original Neko button: it has no title and is only there while the Original Neko switch is on (the other buttons are hidden then)
+		local hatColumn=function(x,title,list,og)
 			local col=(x<0) and 1 or 2
-			hatLabels[col]=mk("TextLabel",{Name=rs(),Position=u2(0.5,x,0.5,-147),Size=u2(0,BTN_W,0,24),BackgroundTransparency=1,Text=title,Font=e.Font.GothamBold,TextSize=20,TextColor3=c3(1,1,1),TextXAlignment=e.TextXAlignment.Left},hatsPanel)
+			if title then
+				hatLabels[col]=mk("TextLabel",{Name=rs(),Position=u2(0.5,x,0.5,-147),Size=u2(0,BTN_W,0,24),BackgroundTransparency=1,Text=title,Font=e.Font.GothamBold,TextSize=20,TextColor3=c3(1,1,1),TextXAlignment=e.TextXAlignment.Left},hatsPanel)
+			end
 			for k,info in next,list do
 				local name,text=info[1],info[2]
 				local y=-113+(k-1)*(BTN_H+BTN_GAP)
 				local b,stroke=makeButton(hatsPanel,text,0,0)
 				b.Position=u2(0.5,x,0.5,y)
-				tinsert(hatBtns,{b=b,stroke=stroke,x=x,y=y,col=col,idx=k})
+				tinsert(hatBtns,{b=b,stroke=stroke,x=x,y=y,col=col,idx=k,og=og})
 				if osclock()<(cdUntil[name] or 0) then
 					runCooldown(b,text,name)
 				end
@@ -4303,6 +4839,17 @@ local main=function()
 		end
 		hatColumn(-BTN_W-10,"Normal",NORMAL_HATS)
 		hatColumn(10,"Neko",TRANS_HATS)
+		hatColumn(-BTN_W/2,nil,{{"originalneko","Original Neko"}},true)
+		--with the Original Neko switch on only its button is shown
+		local refreshHats=function()
+			for _,info in next,hatBtns do
+				info.b.Visible=(not not info.og)==(not not DATA.originalNeko)
+			end
+			for _,label in next,hatLabels do
+				label.Visible=not DATA.originalNeko
+			end
+		end
+		refreshHats()
 
 		local keysPanel=mk("CanvasGroup",{Name=rs(),Position=u2(0.5,-430,0.5,-210),Size=u2(0,860,0,420),BackgroundTransparency=1,BorderSizePixel=0,Visible=false,GroupTransparency=1},group)
 		panels.keys=keysPanel
@@ -4349,16 +4896,17 @@ local main=function()
 		local miscLine,miscRow=newColumn(3)
 		miscLine("Misc",22,PINK,e.Font.GothamBold)
 		miscLine("0 - Reanimate",15)
-		do --Auto pd toggle
+		--a switch that saves DATA[field]
+		local toggleRow=function(text,field,onChange)
 			local row=miscRow(30)
-			mk("TextLabel",{Name=rs(),Size=u2(0,120,1,0),BackgroundTransparency=1,Text="Auto pd",Font=e.Font.Gotham,TextSize=15,TextColor3=c3(1,1,1),TextXAlignment=e.TextXAlignment.Left},row)
-			local sw=mk("TextButton",{Name=rs(),Position=u2(0,125,0.5,-12),Size=u2(0,46,0,24),BackgroundColor3=rgb(90,90,90),BorderSizePixel=0,AutoButtonColor=false,Text=""},row)
+			mk("TextLabel",{Name=rs(),Size=u2(0,150,1,0),BackgroundTransparency=1,Text=text,Font=e.Font.Gotham,TextSize=15,TextColor3=c3(1,1,1),TextXAlignment=e.TextXAlignment.Left},row)
+			local sw=mk("TextButton",{Name=rs(),Position=u2(0,155,0.5,-12),Size=u2(0,46,0,24),BackgroundColor3=rgb(90,90,90),BorderSizePixel=0,AutoButtonColor=false,Text=""},row)
 			mk("UICorner",{CornerRadius=UDim.new(1,0)},sw)
 			local knob=mk("Frame",{Name=rs(),Position=u2(0,3,0.5,-9),Size=u2(0,18,0,18),BackgroundColor3=c3(1,1,1),BorderSizePixel=0},sw)
 			mk("UICorner",{CornerRadius=UDim.new(1,0)},knob)
 			local refresh=function(animate)
-				local goal={BackgroundColor3=DATA.autoPd and PINK or rgb(90,90,90)}
-				local knobGoal={Position=DATA.autoPd and u2(1,-21,0.5,-9) or u2(0,3,0.5,-9)}
+				local goal={BackgroundColor3=DATA[field] and PINK or rgb(90,90,90)}
+				local knobGoal={Position=DATA[field] and u2(1,-21,0.5,-9) or u2(0,3,0.5,-9)}
 				if animate then
 					tween(sw,goal,0.15)
 					tween(knob,knobGoal,0.15)
@@ -4369,11 +4917,33 @@ local main=function()
 			end
 			refresh(false)
 			sw.MouseButton1Click:Connect(function()
-				DATA.autoPd=not DATA.autoPd
+				DATA[field]=not DATA[field]
 				saveData()
 				refresh(true)
+				if onChange then
+					onChange()
+				end
 			end)
 		end
+		--the keys of Original Neko, only shown while its switch is on
+		local ogLines={}
+		local refreshOgLines=function()
+			for _,l in next,ogLines do
+				l.Visible=DATA.originalNeko==true
+			end
+		end
+		toggleRow("Auto pd","autoPd")
+		toggleRow("Original Neko","originalNeko",function()
+			if (not DATA.originalNeko) and modeName=="originalneko" then --its button is gone now
+				setMode("animal")
+			end
+			refreshHats()
+			refreshOgLines()
+		end)
+		for _,k in next,{"F - Claws","R - Feet Kick","T - Giggle","Z - Attack","Click - Combo","V - No Shirt","C - No Pants"} do
+			tinsert(ogLines,miscLine(k,15,sub))
+		end
+		refreshOgLines()
 		miscLine("",6)
 		miscLine("Custom",22,PINK,e.Font.GothamBold)
 		for _,cmd in next,CUSTOM do
