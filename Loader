@@ -4519,7 +4519,8 @@ local main=function()
 	----------------------------------------------------------------------------
 	local BTN_W,BTN_H,BTN_GAP=200,44,10
 	local MENU_X=100 --the buttons are 100 pixels from the left side of the screen...
-	local MENU_Y=-256 --...and the first one starts 256 pixels above the bottom (the last one ends 50 pixels above it)
+	--...and the first one starts 500 pixels above the bottom, on mobile 256 (the last one ends 50 pixels above it)
+	local MENU_Y=(insGet(uis,"TouchEnabled") and not insGet(uis,"KeyboardEnabled")) and -256 or -500
 	local PANEL_X=MENU_X+BTN_W+30
 	local BAR_COUNT=30
 	local BAR_MAX=170 --pixels, how tall a bar gets
