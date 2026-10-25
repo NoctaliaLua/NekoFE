@@ -2293,7 +2293,6 @@ local main=function()
 	local armIn=0.35-ARM_OUT
 	local HIDE_DEPTH=19 --hidden hats sit this many studs below the root part (same as NoctaliaGlitcher)
 	local WALK_SPEED=16
-	local OWNER_ID=11814716094 --the restricted hats (see RESTRICTED) can only be reanimated by this user and the friends of this user
 	local MUSIC_ID="140722099430139" --the menu music
 	local FOLDER="NoctaliaNekoFE" --folder in the workspace folder of the executor: settings, keybinds and the stats
 
@@ -2534,30 +2533,12 @@ local main=function()
 	local TAIL_SWING=rad(20) --how far the tail turns to each side
 	local TAIL_SPEED=2.5
 
-	--the hats that need the owner or a friend of the owner: reanimating with one of them while not being a friend kicks you
-	local RESTRICTED={["16613831300"]=true,["13389369769"]=true,["132367657204737"]=true,["122144916481304"]=true}
-	local RESTRICTED_LIST={}
-	for id in next,RESTRICTED do
-		tinsert(RESTRICTED_LIST,id)
-	end
-
 	--the commands (-gh ids) a mode sends, 10 ids per command
 	local hatCommands=function(m)
 		if m.hats then
 			return gh(m.hats..((m.hair and m.hair~="") and (" "..m.hair) or ""))
 		end
 		return {(m.hats1:gsub("%s+",",")),(m.hats2:gsub("%s+",","))}
-	end
-	local isRestrictedMode=function(name)
-		local m=MODES[name]
-		for _,list in next,{m.hats or "",m.hats1 or "",m.hats2 or ""} do
-			for id in list:gmatch("%d+") do
-				if RESTRICTED[id] then
-					return true
-				end
-			end
-		end
-		return false
 	end
 
 	--the mode is remembered when the script is executed again
@@ -2859,50 +2840,6 @@ local main=function()
 		end)
 	end
 
-	----------------------------------------------------------------------------
-	-- the restricted hats: only the owner and the friends of the owner can reanimate with them
-	----------------------------------------------------------------------------
-	local friendOk=false
-	local isWhitelisted=function()
-		if friendOk then
-			return true
-		end
-		if lp.UserId==OWNER_ID then
-			friendOk=true
-			return true
-		end
-		for _=1,3 do
-			--IsFriendsWith yields and errors when roblox is down
-			local ok,res=pcall(function()
-				return lp:IsFriendsWith(OWNER_ID)
-			end)
-			if ok then
-				friendOk=(res==true)
-				return friendOk
-			end
-			twait(1)
-		end
-		return false
-	end
-	local kickNotWhitelisted=function()
-		pcall(function()
-			lp:Kick("You're not whitelisted")
-		end)
-	end
-	--is one of the restricted hats worn (cframes is the list of the engine, part.m is the mesh of a worn hat)
-	local wearsRestricted=function(cframes)
-		for part in next,cframes do
-			if part.m and (part.m~="") then
-				for _,id in next,RESTRICTED_LIST do
-					local info=hatmeshes[id]
-					if info and (info.m~="") and sfind(part.m,info.m,1,true) then
-						return true
-					end
-				end
-			end
-		end
-		return false
-	end
 	----------------------------------------------------------------------------
 	-- preload: everything the first reanimate needs (the mesh and texture ids of the pieces (bows, faces, tail)), so it doesnt lag
 	----------------------------------------------------------------------------
@@ -3591,11 +3528,6 @@ local main=function()
 		end
 		starting=true
 		local fine,err=pcall(function()
-			--the restricted hats (bows, universal rig) are for the friends of the owner only
-			if isRestrictedMode(modeName) and not isWhitelisted() then
-				kickNotWhitelisted()
-				return
-			end
 			preloadMode(modeName) --nothing to do if the lookups are done
 			if DATA.autoPd then
 				tspawn(fireCmd,"-pd")
@@ -3616,11 +3548,6 @@ local main=function()
 			end
 
 			local cframes=t.cframes
-			--a restricted hat that is worn without the mode (loaded by hand) counts as well
-			if wearsRestricted(cframes) and not isWhitelisted() then
-				kickNotWhitelisted()
-				return
-			end
 			local getPartJoint=t.getPartJoint
 			local addmode=t.addmode
 			local raycastlegs=t.raycastlegs
@@ -5424,10 +5351,6 @@ local main=function()
 	end)
 
 	preloadMode(modeName)
-	--the restricted hats are looked up too, so a worn one can be told apart
-	job(function()
-		fetchAll(RESTRICTED_LIST,30)
-	end)
 	tspawn(openMenu,true)
 end
 main()
