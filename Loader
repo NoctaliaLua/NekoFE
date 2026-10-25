@@ -2347,8 +2347,7 @@ local main=function()
 	local UNI_BAND_UP=0.08 --the band and the band accessory sit this much higher than in transitioner 1
 	local UNI_ACC_DROP=0.48 --the bow accessories (in front of the bows) sit this much straight down
 	local UNI_BACK=0.4 --the bows and their accessories sit this far further back (towards the torso)...
-	local UNI_DOWN=0.1 --...and this much lower than the old bows
-	local UNI_HANG=0.35 --how far above the middle of the bow its swing point is (the top of the ugc)
+	local UNI_DOWN=0.1 --...and this much lower than the old bows	local UNI_HANG=0.35 --how far above the middle of the bow its swing point is (the top of the ugc)
 	local UNI_SOFT=0.5 --how strong the bow spring is compared to the old bows
 	--how the universal limb accessory sits on each body part (the mesh is the same for all four, only the part it is aligned to changes)
 	local UNI_LIMB_C0={
@@ -2369,8 +2368,9 @@ local main=function()
 	end
 	--o.trans = {torso, left arm, right arm} transition hats (hidden by K), o.legs = {left leg, right leg} accessories (o.legFlip / o.legUp move them), o.tail = optional
 	local universalPieces=function(o)
-		local lb=v3(-0.4,0.4-UNI_DOWN-UNI_BOW_DROP,-0.5+UNI_BACK) --the places of the neko bows, moved back and down
-		local rb=v3(0.5,0.4-UNI_DOWN-UNI_BOW_DROP,-0.5+UNI_BACK)
+		--the places of the neko bows, moved back and down, then 0.3 studs forward again and 0.05 studs lower
+		local lb=v3(-0.4,0.4-UNI_DOWN-UNI_BOW_DROP-0.05,-0.5+UNI_BACK-0.3)
+		local rb=v3(0.5,0.4-UNI_DOWN-UNI_BOW_DROP-0.05,-0.5+UNI_BACK-0.3)
 		local acc=v3(0,-UNI_ACC_DROP,-BOW_ACC_FWD)
 		local p={
 			--K (the changer) shows the bows, the bow accessories and the torso addon and hides the transition hats
