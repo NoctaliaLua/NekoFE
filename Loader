@@ -1277,6 +1277,12 @@ local reanimate=function()
 		elseif #key==1 then
 			key=KeyCode[supper(ssub(key,1,1))]
 			modes[key]=mode
+		else
+			--"ctrl+m" / "alt+m": the key while Ctrl / Alt is held (the plain key keeps its own mode)
+			local modifier,k=string.match(key,"^(%a+)%+(%a)$")
+			if modifier then
+				modes[modifier.."+"..supper(k)]=mode
+			end
 		end
 	end
 
@@ -1305,6 +1311,11 @@ local reanimate=function()
 			return
 		end
 		a=insGet(a,"KeyCode")
+		local modekey=a
+		local held=(IsKeyDown(uis,KeyCode.LeftControl) or IsKeyDown(uis,KeyCode.RightControl)) and "ctrl+" or ((IsKeyDown(uis,KeyCode.LeftAlt) or IsKeyDown(uis,KeyCode.RightAlt)) and "alt+")
+		if held and modes[held..a.Name] then
+			modekey=held..a.Name
+		end
 		if a==keyW then
 			Wpressed=true
 			refreshKeyboardMovement()
@@ -1321,15 +1332,15 @@ local reanimate=function()
 			jumpingInput=true
 		elseif a==keyShift then
 			shiftlock=allowshiftlock and not shiftlock
-		elseif modes[a] then
+		elseif modes[modekey] then
 			local modeLeft=modes[mode].modeLeft
 			if modeLeft then
 				modeLeft()
 			end
-			if mode==a then
+			if mode==modekey then
 				mode="default"
 			else
-				mode=a
+				mode=modekey
 			end
 			local modet=modes[mode]
 			lerpsIdle=modet.idle or defaultmode.idle or emptyfunction
@@ -3028,14 +3039,32 @@ local main=function()
 
 	--sit hug: sits on its legs (folded back), arms around the front, the head moves 0.3 studs forward and back
 	--the torso is 0.4 studs lower than it was, the legs stay where they were (legUp is "up" in torso space, it lifts the hips back by the same amount)
-	poses.sitHug=function(s)
+	--down (Ctrl + M): the torso lies almost on the floor, 10 degrees above it (80 degrees bowed forward), the hips and legs stay where they are,
+	--the arms hug forward along the floor and the head looks down at it
+	local HUG_DOWN_LEAN=rad(80)
+	poses.sitHug=function(s,down)
+		local f=0.15*(1-cos(s*1.5)) --0 to 0.3 studs
+		local nod=rad(3)*(f/0.3)
+		local squeeze=rad(3)*sin(s*1.5)
+		if down then
+			local lean=HUG_DOWN_LEAN
+			local legD=function(side)
+				--the legs are folded back flat like standing hips, the hips are at their normal place (2.5 below the root part), the torso turns around them
+				return legC(side,v3_0,cfMul(rx(lean),cfMul(ry(rad(side*30)),rx(-pi/2))))
+			end
+			return {
+				root=rootC(v3(0,-2.5+cos(lean)+0.02*sin(s*1.5),-sin(lean)),rx(-lean)),
+				neck=neckC(v3(0,1,-f),angles(lean-nod+0.03-rad(40),0,0)),
+				rs=armC(1,v3_0,rad(165),rad(-20)+squeeze,0),
+				ls=armC(-1,v3_0,rad(165),rad(-20)+squeeze,0),
+				rh=legD(1),
+				lh=legD(-1)
+			}
+		end
 		local drop=0.4
 		local off=-1.5-drop
 		local lean=rad(8)
 		local legUp=v3(0,drop*cos(lean),drop*sin(lean))
-		local f=0.15*(1-cos(s*1.5)) --0 to 0.3 studs
-		local nod=rad(3)*(f/0.3)
-		local squeeze=rad(3)*sin(s*1.5)
 		return {
 			root=rootC(v3(0,off+0.02*sin(s*1.5),0),rx(-lean)),
 			neck=neckC(v3(0,1,-f),angles(lean-nod+0.03,0,0)),
@@ -3043,6 +3072,38 @@ local main=function()
 			ls=armC(-1,v3_0,rad(85),rad(-48)+squeeze,0),
 			rh=legC(1,legUp,cfMul(ry(rad(30)),rx(-pi/2+lean))),
 			lh=legC(-1,legUp,cfMul(ry(rad(-30)),rx(-pi/2+lean)))
+		}
+	end
+
+	--stretch squat (Alt + M): the torso is leaned back 20 degrees and its bottom (the hips) goes down from 0.8 to 0.4 studs above the ground and back up,
+	--the legs are spread out sideways and always touch the ground, the hands are planted on the ground behind the torso.
+	--the ground is 3 studs below the root part. a leg turns around the middle of its top edge, so the joint is moved to where that puts the leg
+	local SQUAT_HIGH,SQUAT_LOW=0.8,0.4
+	--the torso leans back SQUAT_LEAN around the hips, so the leg joints are worked out in world space and turned into torso space (rx(-lean))
+	local SQUAT_LEAN=rad(20)
+	local squatLeg=function(side,h)
+		--lowest point of a leg turned out by a (2 long, 1 wide): 2cos(a)+0.5sin(a) under the hip, solved for the height h of the hip
+		local r=sqrt(4.25)
+		local a=math.min(math.atan2(0.5,2)+math.acos(clamp(h/r,-1,1)),pi/2) --lying flat is the limit (a bit lower than 0.5 it sinks in the ground)
+		local toTorso=rx(-SQUAT_LEAN)
+		local off=cfGet(cfMul(toTorso,cf(side*(0.5*cos(a)-0.5),0.5*sin(a),0)),"Position")
+		return legC(side,off,cfMul(toTorso,rz(side*a)))
+	end
+	poses.stretchSquat=function(s)
+		local w=s*2
+		local up=0.5+0.5*cos(w) --1 at the top, 0 at the bottom
+		local h=SQUAT_LOW+(SQUAT_HIGH-SQUAT_LOW)*up
+		local lean=SQUAT_LEAN
+		--the hands stay planted on the ground behind the torso: the arm only changes how far back it points while the shoulders go up and down (it is 2 long)
+		local back=math.acos(min((h+1.5*cos(lean))/2,1))
+		local armPitch=-(back+lean)
+		return {
+			root=rootC(v3(0,h-3+cos(lean),sin(lean)),rx(lean)),
+			neck=neckC(v3(0,1,0),angles(-lean+rad(8)+rad(6)*up,0,0)),
+			rs=armC(1,v3_0,armPitch,rad(12),0),
+			ls=armC(-1,v3_0,armPitch,rad(12),0),
+			rh=squatLeg(1,h),
+			lh=squatLeg(-1,h)
 		}
 	end
 
@@ -3771,31 +3832,50 @@ local main=function()
 			})
 			--the emotes are not there with Original Neko, R (feet kick) and T (giggle) are the ones of nekov4.lua instead
 			local addEmote=nekoOn and emptyfunction or addmode
+			--the feet kick and the giggle of nekov4.lua, also on V and E in every mode (V is the changer with Original Neko, which has R for the kick)
+			nk.kickMode={
+				idle = function()
+					velYchg()
+					S.nChange=1.05
+					nApply(nk.lay(S.nSine))
+				end
+			}
+			nk.giggleMode={
+				modeEntered = function()
+					S.tUntil=sine+nk.HAPPY_TIME
+					tdelay(0.3,function()
+						nk.sound("875978120",4,0.9)
+					end)
+				end,
+				idle = function()
+					velYchg()
+					S.nChange=4.3
+					nApply(nk.happy(S.nSine))
+					if sine>S.tUntil then
+						t.resetmode()
+					end
+				end
+			}
 			if nekoOn then
-				addmode("r", {
-					idle = function()
-						velYchg()
-						S.nChange=1.05
-						nApply(nk.lay(S.nSine))
-					end
-				})
-				addmode("t", {
-					modeEntered = function()
-						S.tUntil=sine+nk.HAPPY_TIME
-						tdelay(0.3,function()
-							nk.sound("875978120",4,0.9)
-						end)
-					end,
-					idle = function()
-						velYchg()
-						S.nChange=4.3
-						nApply(nk.happy(S.nSine))
-						if sine>S.tUntil then
-							t.resetmode()
-						end
-					end
-				})
+				addmode("r",nk.kickMode)
+				addmode("t",nk.giggleMode)
+			else
+				addmode("v",nk.kickMode)
 			end
+			addmode("e",nk.giggleMode)
+			--Ctrl + M: sit hug looking down, Alt + M: stretch squat (not listed in the keybinds tab)
+			addmode("ctrl+m", {
+				idle = function()
+					velYchg()
+					apply(poses.sitHug(sine,true))
+				end
+			})
+			addmode("alt+m", {
+				idle = function()
+					velYchg()
+					apply(poses.stretchSquat(sine))
+				end
+			})
 
 			----------------------------------------------------------------
 			-- emotes. Z lay down, X sit, C cute sit, B wave, N silly dance, M sit hug, T bow fix, Y exhausted, U tired fall
@@ -4383,7 +4463,7 @@ local main=function()
 	end
 	--keys the script already uses, they cant be a custom keybind
 	local RESERVED={}
-	for _,n in next,{"Zero","One","Two","Three","Four","Z","X","C","B","N","M","T","Y","U","R","Q","K","L","W","A","S","D","Space","LeftShift","RightShift","RightControl"} do
+	for _,n in next,{"Zero","One","Two","Three","Four","Z","X","C","B","N","M","T","Y","U","R","Q","K","L","E","V","W","A","S","D","Space","LeftShift","RightShift","RightControl"} do
 		RESERVED[n]=true
 	end
 	local openMenu=nil --defined in the menu part below
