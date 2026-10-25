@@ -4788,6 +4788,20 @@ local main=function()
 		M.gui=gui
 		M.group=group
 
+		--the menu is made in pixels for a big screen, on a small one (phone) everything shrinks to fit. the group is made bigger by the same amount so it still covers the screen
+		local uiScale=mk("UIScale",{Name=rs()},group)
+		local fitScale=function()
+			local vp=gui.AbsoluteSize
+			if vp.X<=0 or vp.Y<=0 then
+				return
+			end
+			local s=clamp(min(1,vp.X/1100,vp.Y/700),0.4,1)
+			uiScale.Scale=s
+			group.Size=u2(1/s,0,1/s,0)
+		end
+		fitScale()
+		gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(fitScale)
+
 		--the bars along the whole bottom of the screen
 		local barsFrame=mk("Frame",{Name=rs(),AnchorPoint=v2(0,1),Position=u2(0,0,1,0),Size=u2(1,0,0,BAR_MAX+10),BackgroundTransparency=1,Visible=false},group)
 		local bars={}
