@@ -2720,6 +2720,7 @@ local main=function()
 	local DATA={
 		autoPd=false, --fire -pd too when reanimating
 		originalNeko=false, --the Original Neko hats (modeName originalneko) with the animations and keys of nekov4.lua instead of the emotes
+		moreEmotes=false, --the emote tools of Catware Anims (made after reanimating), see poses.emotes
 		binds={}, --custom command id -> name of the key
 		stats={reanimations=0,hats=0,usage=0} --usage is in seconds, all sessions together
 	}
@@ -2739,6 +2740,7 @@ local main=function()
 				if type(saved)=="table" then
 					DATA.autoPd=(saved.autoPd==true)
 					DATA.originalNeko=(saved.originalNeko==true)
+					DATA.moreEmotes=(saved.moreEmotes==true)
 					if type(saved.topbar)=="table" and tonumber(saved.topbar.x) and tonumber(saved.topbar.y) then
 						DATA.topbar={x=tonumber(saved.topbar.x),y=tonumber(saved.topbar.y)}
 					end
@@ -3581,6 +3583,248 @@ local main=function()
 	end
 
 	----------------------------------------------------------------------------
+	-- more emotes (the More Emotes switch): tools of Catware Anims (LostCode) that play keyframe animations on the joints of the hat rig.
+	-- they are only made after reanimating. the character is dead then, so the tools are a hotbar of this script (click a slot to equip, again to unequip)
+	-- instead of the Roblox backpack, a keyframe is turned into the C0 of the joint like Animator6D did (C0 of the joint * the pose)
+	----------------------------------------------------------------------------
+	poses.emotes={}
+	do
+		local em=poses.emotes
+		local PACK="75515993534839"
+		local EPIK="https://github.com/gObl00x/Epik-Musics/raw/refs/heads/main/"
+		local NITRO="https://github.com/Nitro-GT/music/raw/refs/heads/main/"
+		local EPIC="https://github.com/EpicFire8/Music/raw/refs/heads/main/"
+		--speed = walk speed while it plays (nil = the normal one), anim = {asset id, name of the animation inside AnimSaves (nil = the asset is the animation)}
+		local LIST={
+			{name="Boppin",anim={"15710560047"},url=EPIK.."Boppin.mp3",file="Boppin.mp3"},
+			{name="Moongazer",anim={"80947480089411"},url=NITRO.."Moongazer.mp3",file="Moongazer.mp3"},
+			{name="C14",anim={PACK,"ClassC14"},url=EPIC.."C14.mp3",file="C14.mp3"},
+			{name="Take The L",anim={"8903870018","Take The L"},url=EPIK.."L%20Emote.mp3",file="L Emote.mp3",speed=6.5},
+			{name="Caramelldansen",anim={"6929983041","Imported Animation Clip"},url=NITRO.."caramell.mp3",file="caramell.mp3",speed=2.5},
+			{name="Rakuten Lemonade",anim={PACK,"rakuten"},url=EPIK.."Rakuten%20Lemonade.mp3",file="Rakuten Lemonade.mp3",speed=13},
+			{name="Lemon Melon Cookie",anim={PACK,"Lemon Melon Cookie"},url=EPIK.."LMC.mp3",file="LMC.mp3"},
+			{name="Arona Dance",anim={PACK,"The One Arona Dance"},url=EPIC.."AronaDance.mp3",file="AronaDance.mp3"},
+			{name="Internet Yamero",anim={PACK,"internet yamero"},url=EPIC.."InternetYamero.mp3",file="Internet Yamero.mp3",speed=10},
+			{name="Liar Dance",anim={PACK,"LIARDANCER4"},url=EPIC.."LiarDance.mp3",file="LiarDance.mp3",speed=6}
+		}
+		--the default C0 of the joints of the engine, a pose of a keyframe is multiplied with it
+		local BASE={
+			["Torso"]=cf(0,0,0,-1,0,0,0,0,1,0,1,0), --RootJoint
+			["Head"]=cf(0,1,0,-1,0,0,0,0,1,0,1,0), --Neck
+			["Right Arm"]=cf(1,0.5,0,0,0,1,0,1,0,-1,0,0),
+			["Left Arm"]=cf(-1,0.5,0,0,0,-1,0,1,0,1,0,0),
+			["Right Leg"]=cf(1,-1,0,0,0,1,0,1,0,-1,0,0),
+			["Left Leg"]=cf(-1,-1,0,0,0,-1,0,1,0,1,0,0)
+		}
+		local MUSIC_FOLDER=FOLDER.."/Music"
+		local canMusic=canFile and (type(getcustomasset)=="function")
+		local assets={} --asset id -> the loaded asset (false if it could not be loaded)
+		local packModel=nil
+		--the same order as Animator6D: GetObjects, and the model with all of the animations if that does not work (403)
+		local loadAsset=function(id)
+			if assets[id]~=nil then
+				return assets[id]
+			end
+			local ok,obj=pcall(function()
+				return game:GetObjects("rbxassetid://"..id)[1]
+			end)
+			if not (ok and obj) then
+				pcall(function()
+					packModel=packModel or game:GetObjects("rbxassetid://107495486817639")[1]
+					obj=packModel and packModel:FindFirstChild(id,true)
+				end)
+			end
+			assets[id]=obj or false
+			return assets[id]
+		end
+		--{time, {pose name -> cframe}} of every keyframe, sorted
+		local parse=function(kfs)
+			if kfs and (not IsA(kfs,"KeyframeSequence")) then
+				kfs=kfs:FindFirstChildWhichIsA("KeyframeSequence",true)
+			end
+			if not kfs then
+				return nil
+			end
+			local seq={}
+			for _,kf in next,kfs:GetKeyframes() do
+				local entry={t=kf.Time,p={}}
+				for _,pose in next,kf:GetDescendants() do
+					if IsA(pose,"Pose") and pose.Weight>0 and BASE[pose.Name] then
+						entry.p[pose.Name]=pose.CFrame
+					end
+				end
+				tinsert(seq,entry)
+			end
+			table.sort(seq,function(a,b) return a.t<b.t end)
+			if #seq==0 then
+				return nil
+			end
+			return seq
+		end
+		local fetch=function(d)
+			local obj=loadAsset(d.anim[1])
+			if not obj then
+				return nil
+			end
+			if d.anim[2] then
+				local saves=obj:FindFirstChild("AnimSaves") or obj:FindFirstChild("AnimSaves",true)
+				obj=saves and (saves:FindFirstChild(d.anim[2]) or saves:WaitForChild(d.anim[2],5))
+			end
+			return obj and parse(obj)
+		end
+		--joints = {Torso=RootJoint, Head=Neck, ["Right Arm"]=RightShoulder ...}, speed(n) sets the walk speed, restore() sets the normal one, resetmode() ends the emote mode that is playing
+		em.start=function(env)
+			local st={cur=nil,t0=0,sound=nil,slots={},data={}}
+			local gui=newGui(8)
+			local bar=mk("Frame",{Name=rs(),AnchorPoint=v2(0.5,1),Position=u2(0.5,0,1,-14),Size=u2(0,0,0,56),AutomaticSize=e.AutomaticSize.X,BackgroundTransparency=1},gui)
+			mk("UIListLayout",{FillDirection=e.FillDirection.Horizontal,Padding=UDim.new(0,4),SortOrder=e.SortOrder.LayoutOrder},bar)
+			local stopSound=function()
+				if st.sound then
+					pcall(function()
+						st.sound:Stop()
+						st.sound:Destroy()
+					end)
+					st.sound=nil
+				end
+			end
+			local unequip=function()
+				local idx=st.cur
+				if idx then
+					st.cur=nil
+					stopSound()
+					env.restore()
+					local slot=st.slots[idx]
+					if slot then
+						slot.stroke.Thickness=0
+						slot.btn.BackgroundTransparency=0.4
+					end
+				end
+			end
+			local equip=function(idx)
+				local was=st.cur
+				unequip()
+				if was==idx then
+					return
+				end
+				local d=LIST[idx]
+				local data=st.data[idx]
+				if not (data and data.seq) then
+					env.notify(data and "Could not load "..d.name or "Loading "..d.name.."...")
+					return
+				end
+				env.resetmode()
+				st.cur=idx
+				st.t0=sine
+				env.speed(d.speed or WALK_SPEED)
+				local slot=st.slots[idx]
+				slot.stroke.Thickness=3
+				slot.btn.BackgroundTransparency=0.15
+				if data.path then
+					pcall(function()
+						local s=i("Sound")
+						s.Name=rs()
+						s.SoundId=getcustomasset(data.path)
+						s.Volume=2.5
+						s.Looped=true
+						s.Parent=FindFirstChildOfClass(game,"SoundService")
+						s:Play()
+						st.sound=s
+					end)
+				end
+			end
+			for idx,d in next,LIST do
+				local btn=mk("TextButton",{Name=rs(),LayoutOrder=idx,Size=u2(0,56,0,56),BackgroundColor3=rgb(25,27,29),BackgroundTransparency=0.4,BorderSizePixel=0,AutoButtonColor=false,Text=d.name,TextWrapped=true,TextSize=11,Font=e.Font.GothamMedium,TextColor3=c3(1,1,1)},bar)
+				mk("UICorner",{CornerRadius=UDim.new(0,8)},btn)
+				mk("UIPadding",{PaddingLeft=UDim.new(0,3),PaddingRight=UDim.new(0,3)},btn)
+				local stroke=mk("UIStroke",{Color=rgb(255,128,190),Thickness=0,ApplyStrokeMode=e.ApplyStrokeMode.Border},btn)
+				st.slots[idx]={btn=btn,stroke=stroke}
+				btn.MouseButton1Click:Connect(function()
+					equip(idx)
+				end)
+			end
+			--the animations and the music are loaded now (after reanimating), a slot works as soon as its own animation is there
+			tspawn(function()
+				if canMusic then
+					pcall(function()
+						if not isfolder(FOLDER) then
+							makefolder(FOLDER)
+						end
+						if not isfolder(MUSIC_FOLDER) then
+							makefolder(MUSIC_FOLDER)
+						end
+					end)
+				end
+				local left=#LIST
+				for idx,d in next,LIST do
+					local data={}
+					st.data[idx]=data
+					tspawn(function()
+						local ok,seq=pcall(fetch,d)
+						data.seq=ok and seq or nil
+						if canMusic then
+							pcall(function()
+								local path=MUSIC_FOLDER.."/"..d.file
+								if not isfile(path) then
+									writefile(path,game:HttpGet(d.url))
+								end
+								data.path=path
+							end)
+						end
+						left=left-1
+						if left==0 and alive then
+							env.notify("Emotes loaded")
+						end
+					end)
+				end
+			end)
+			--every frame (after the animations, before the joints are refreshed): the pose of the emote that is equipped
+			st.frame=function()
+				local idx=st.cur
+				local data=idx and st.data[idx]
+				local seq=data and data.seq
+				if not seq then
+					return
+				end
+				local length=seq[#seq].t
+				local el=sine-st.t0
+				if length>0 then
+					el=el%length
+				else
+					el=0
+				end
+				local a,b=seq[1],nil
+				for k=1,#seq do
+					if seq[k].t<=el then
+						a=seq[k]
+						b=seq[k+1]
+					else
+						break
+					end
+				end
+				local alpha=0
+				if b and b.t>a.t then
+					alpha=(el-a.t)/(b.t-a.t)
+				end
+				for name,pose in next,a.p do
+					local j=env.joints[name]
+					if j then
+						local to=b and b.p[name]
+						if to and alpha>0 then
+							pose=Lerp(pose,to,alpha)
+						end
+						j.C0=cfMul(BASE[name],pose)
+					end
+				end
+			end
+			st.cleanup=function()
+				unequip()
+				pcall(Destroy,gui)
+			end
+			return st
+		end
+	end
+
+	----------------------------------------------------------------------------
 	-- reanimate
 	----------------------------------------------------------------------------
 	local startReanimate=function()
@@ -3968,6 +4212,25 @@ local main=function()
 			-- transitioner mode only (K and L are not in the console)
 			----------------------------------------------------------------
 			--K (the changer) and L (the transitioner) are not modes: they are toggles in the key handler (the animation of L is played from frame()), so emotes dont change them
+			--More Emotes: the emote tools (made now, after reanimating, they are not keybinds)
+			local EM=nil
+			if DATA.moreEmotes then
+				local okEm,res=pcall(poses.emotes.start,{
+					joints={["Torso"]=RootJoint,["Head"]=Neck,["Right Arm"]=RightShoulder,["Left Arm"]=LeftShoulder,["Right Leg"]=RightHip,["Left Leg"]=LeftHip},
+					speed=setWalkSpeed,
+					restore=function()
+						if nekoOn then
+							nekoSpeed()
+						else
+							setWalkSpeed(WALK_SPEED)
+						end
+					end,
+					resetmode=t.resetmode,
+					notify=notify
+				})
+				EM=okEm and res or nil
+			end
+
 			----------------------------------------------------------------
 			-- hats: find the bows and the faces that are worn and take over their joints
 			----------------------------------------------------------------
@@ -4162,7 +4425,10 @@ local main=function()
 			-- per frame: put the bows on the torso, show the face you picked and hide the others
 			----------------------------------------------------------------
 			local frame=function()
-				if sine>=S.nextResolve then
+					if EM then
+						EM.frame()
+					end
+					if sine>=S.nextResolve then
 					S.nextResolve=sine+1
 					resolve()
 				end
@@ -4408,7 +4674,12 @@ local main=function()
 				t.setJumpPower(nk.JUMP_POWER)
 			end
 
-			RT={t=t,S=S,cleanup=clearSmokes}
+			RT={t=t,S=S,cleanup=function()
+					clearSmokes()
+					if EM then
+						EM.cleanup()
+					end
+				end}
 			DATA.stats.reanimations=DATA.stats.reanimations+1
 			saveData()
 			updateStats()
@@ -4966,6 +5237,7 @@ local main=function()
 			tinsert(ogLines,miscLine(k,15,sub))
 		end
 		refreshOgLines()
+		toggleRow("More Emotes","moreEmotes") --no lines for the emotes, they are tools that show up after reanimating
 		miscLine("",6)
 		miscLine("Custom",22,PINK,e.Font.GothamBold)
 		for _,cmd in next,CUSTOM do
