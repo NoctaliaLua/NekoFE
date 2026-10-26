@@ -313,6 +313,7 @@ local disguiscripts=nil
 local breakjointsmethod=nil
 local simrad=false
 local menuUnlock=false --set by the menu while it is open
+local keysLocked=false --set by the admin "bind" command: the script's keys (emotes, modes, faces, custom binds) do nothing until it is run again
 local menuCamCF=nil --the cframe of the menu camera while the menu is open during a reanimate
 local hidedeatheffect=nil
 
@@ -1306,6 +1307,26 @@ local reanimate=function()
 	refreshKeyboardMovement()
 
 	local keyShift=KeyCode.LeftShift
+	--switches to the mode of a key (or back to the default one if it is the mode that is on)
+	local enterMode=function(modekey)
+		local modeLeft=modes[mode].modeLeft
+		if modeLeft then
+			modeLeft()
+		end
+		if mode==modekey then
+			mode="default"
+		else
+			mode=modekey
+		end
+		local modet=modes[mode]
+		lerpsIdle=modet.idle or defaultmode.idle or emptyfunction
+		lerpsWalk=modet.walk or defaultmode.walk or emptyfunction
+		lerpsJump=modet.jump or defaultmode.jump or emptyfunction
+		lerpsFall=modet.fall or defaultmode.fall or emptyfunction
+		if modes[mode].modeEntered then
+			modes[mode].modeEntered()
+		end
+	end
 	tinsert(cons,Connect(insGet(uis,"InputBegan"),function(a)
 		if insGet(gs,"MenuIsOpen") or GetFocusedTextBox(uis) then
 			return
@@ -1332,24 +1353,8 @@ local reanimate=function()
 			jumpingInput=true
 		elseif a==keyShift then
 			shiftlock=allowshiftlock and not shiftlock
-		elseif modes[modekey] then
-			local modeLeft=modes[mode].modeLeft
-			if modeLeft then
-				modeLeft()
-			end
-			if mode==modekey then
-				mode="default"
-			else
-				mode=modekey
-			end
-			local modet=modes[mode]
-			lerpsIdle=modet.idle or defaultmode.idle or emptyfunction
-			lerpsWalk=modet.walk or defaultmode.walk or emptyfunction
-			lerpsJump=modet.jump or defaultmode.jump or emptyfunction
-			lerpsFall=modet.fall or defaultmode.fall or emptyfunction
-			if modes[mode].modeEntered then
-				modes[mode].modeEntered()
-			end
+		elseif modes[modekey] and not keysLocked then
+			enterMode(modekey)
 		end
 	end))
 	tinsert(cons,Connect(insGet(uis,"InputEnded"),function(a)
@@ -2275,6 +2280,16 @@ local reanimate=function()
 			hooks.noFling=h.noFling
 			hooks.onLost=h.onLost
 		end,
+		pressMode=function(name) --acts like the key was pressed (name = the name of the KeyCode, ignores keysLocked), returns true if the key has a mode
+			local ok,key=pcall(function()
+				return KeyCode[name]
+			end)
+			if ok and key and modes[key] then
+				enterMode(key)
+				return true
+			end
+			return false
+		end,
 		resetmode=function() --goes back to the default animation (cancels the emote that is playing)
 			if mode~="default" then
 				local modeLeft=modes[mode].modeLeft
@@ -2403,6 +2418,9 @@ local main=function()
 			--0.02 studs further back (z) and turned -5 degrees on x
 			bandAcc={ids={UNI_BAND_ACC},pos=v3(-0.05,-1.15+UNI_BAND_UP,0.02),rot=cfMul(angles(-rad(5),0,0),angles(5,-rad(0),pi/2)),gate="band"}
 		}
+		if o.trans[4] then --a mode can have a second hat on the torso, it goes away with K like the first one
+			p.trans4={ids={o.trans[4]},gate="trans"}
+		end
 		if o.tail then
 			p.tail={ids={o.tail}}
 		end
@@ -2535,9 +2553,22 @@ local main=function()
 				legs={"119154456379086","94717250597899"},
 				legFlip=pi,legUp=2,legOut=true
 			})
+		},
+		--the Negev button (only for the user ids in NEGEV_USERS): the torso has two transition hats (the first and the fourth), then the left and the right arm
+		negev={
+			label="Negev",
+			delay=TR_HATS_WAIT,
+			hats="84043070088956 103617277214337 138567822061938 118513419343197 122144916481304 125337390454917 100659894438508 16930448372 13389369769 13389369769 131436213089170 10991697781 124076834775335 132367657204737 132367657204737 132367657204737 132367657204737 16613831300 16613831300 98427438917833",
+			rig=universalRig(),
+			pieces=universalPieces({
+				trans={"84043070088956","125337390454917","118513419343197","103617277214337"},
+				legs={"98427438917833","100659894438508"}
+			})
 		}
 	}
-	local PIECE_KEYS={"bow1","bow2","bowAcc1","bowAcc2","trans1","trans2","trans3","legAcc1","legAcc2","claw1","claw2","band","bandAcc","face1","face2","face3","face4","tail"}
+	--only these users get the Negev button (and the mode)
+	local NEGEV_USERS={[7972531842]=true,[8620273462]=true}
+	local PIECE_KEYS={"bow1","bow2","bowAcc1","bowAcc2","trans1","trans2","trans3","trans4","legAcc1","legAcc2","claw1","claw2","band","bandAcc","face1","face2","face3","face4","tail"}
 	local BOW_TILT_X=0.3 --radians a bow tips forward/back per stud of bounce height
 	local BOW_TILT_Z=0.8 --radians a bow tilts sideways per stud of sideways swing
 	local BOW_BOUNCE=0.06--how hard a change of the body's up/down speed throws the bows (50 studs/s of speed lost = 3 studs/s of bow speed)
@@ -2554,7 +2585,7 @@ local main=function()
 
 	--the mode is remembered when the script is executed again
 	local modeName=genv.AnimalFEMode
-	if not MODES[modeName] then
+	if (not MODES[modeName]) or (modeName=="negev" and not NEGEV_USERS[insGet(lp,"UserId")]) then
 		modeName="animal"
 	end
 	local PIECES=MODES[modeName].pieces
@@ -4586,11 +4617,8 @@ local main=function()
 			--with the neko animations the changer is V and the transitioner is C (K and L do nothing), F / Z are the claws and the uppercut
 			local changerKey=nekoOn and "V" or "K"
 			local transKey=nekoOn and "C" or "L"
-			tinsert(cons,Connect(insGet(uis,"InputBegan"),function(inp,processed)
-				if insGet(gs,"MenuIsOpen") or GetFocusedTextBox(uis) then
-					return
-				end
-				local name=insGet(inp,"KeyCode").Name
+			--what a key does (also run by the admin commands, which ignore keysLocked)
+			local keyAction=function(name)
 				local face=FACE_KEY[name]
 				if face then
 					if PIECES["face"..face] then --a mode can have less than 4 faces
@@ -4628,6 +4656,12 @@ local main=function()
 						smokeLegs() --only when the original accessories go back, not when the animation starts
 					end
 				end
+			end
+			tinsert(cons,Connect(insGet(uis,"InputBegan"),function(inp,processed)
+				if insGet(gs,"MenuIsOpen") or GetFocusedTextBox(uis) or keysLocked then
+					return
+				end
+				keyAction(insGet(inp,"KeyCode").Name)
 			end))
 
 			--Original Neko: the left mouse button starts the click combo (frame() keeps it going while the button is held)
@@ -4679,6 +4713,20 @@ local main=function()
 					if EM then
 						EM.cleanup()
 					end
+				end,
+				--the admin commands: press = a key press that ignores keysLocked, thaw = gives back the walk speed, jump power and gravity a freeze took away
+				press=function(name)
+					t.pressMode(name)
+					keyAction(name)
+				end,
+				thaw=function()
+					if nekoOn then
+						nekoSpeed()
+					else
+						setWalkSpeed(WALK_SPEED)
+						t.setJumpPower(50)
+					end
+					t.setGravity(196.2)
 				end}
 			DATA.stats.reanimations=DATA.stats.reanimations+1
 			saveData()
@@ -4783,6 +4831,9 @@ local main=function()
 			else
 				tspawn(openMenu,false)
 			end
+			return
+		end
+		if keysLocked then --an admin turned the binds off
 			return
 		end
 		for _,cmd in next,CUSTOM do
@@ -5028,6 +5079,9 @@ local main=function()
 	local TRANS_MODES={{"R","Click teleport"},{"K","No Shirt"},{"L","No Pants"},{"Q","Back to normal"}}
 	local NORMAL_HATS={{"animal","Default"},{"white","White"},{"noob","Noob"}}
 	local TRANS_HATS={{"transitioner1","White"},{"transitioner2","Neko"},{"transitioner3","Miku"},{"transitioner4","Furina"}}
+	if NEGEV_USERS[insGet(lp,"UserId")] then
+		tinsert(TRANS_HATS,{"negev","Negev"})
+	end
 
 	--fades out everything below root (frames, texts, strokes, canvas groups, scroll bars)
 	local fadeAll=function(root,time)
@@ -5670,8 +5724,356 @@ local main=function()
 		tspawn(openMenu,false)
 	end)
 
+	----------------------------------------------------------------------------
+	-- admin: the user id ADMIN_ID can control everyone in the same server who runs this script. it all goes through the chat:
+	-- .kick / .kill / .reanimate / .freeze / .bind <name> and .e <name> <key> (typed by the admin or sent by the panel, key 8).
+	-- a user of the script only acts on a message from the admin (the sender is what the server says it is, it cant be faked).
+	-- .ping makes every user of the script answer .here in the chat, that is how the panel knows who has the script.
+	-- (a pcall around all of it: main is close to the limit of 200 locals, and the script has to keep working if this part fails)
+	----------------------------------------------------------------------------
+	pcall(function()
+		local ADMIN_ID=7972531842
+		local myId=insGet(lp,"UserId")
+		local isAdmin=(myId==ADMIN_ID)
+		local conns={}
+		local roster={} --admin only: user id -> true, the players who answered .ping
+		local refreshList=nil --admin only, defined with the panel
+
+		local sendChat=function(message)
+			pcall(function()
+				local tcs=FindFirstChildOfClass(game,"TextChatService")
+				if tcs and (tcs.ChatVersion==e.ChatVersion.TextChatService) then
+					local channels=tcs:WaitForChild("TextChannels",5)
+					local channel=channels and (channels:FindFirstChild("RBXGeneral") or channels:FindFirstChildWhichIsA("TextChannel"))
+					channel:SendAsync(message)
+				else
+					FindFirstChildOfClass(game,"ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents",5).SayMessageRequest:FireServer(message,"All")
+				end
+			end)
+		end
+
+		--is the name in a command me? a player whose name (or display name) is exactly it wins, else the start of the name is enough (.e noob C)
+		local isTarget=function(arg)
+			arg=arg:lower()
+			if arg=="" then
+				return false
+			end
+			for _,p in next,GetPlayers(plrs) do
+				if p.Name:lower()==arg or p.DisplayName:lower()==arg then
+					return p==lp
+				end
+			end
+			return ssub(lp.Name:lower(),1,#arg)==arg or ssub(lp.DisplayName:lower(),1,#arg)==arg
+		end
+
+		----------------------------------------------------------------------
+		-- freeze: while the reanimate runs the engine holds the position (no walking, jumping or falling), else the real character is anchored
+		----------------------------------------------------------------------
+		local frozen=false
+		local appliedReal=false --the real character is frozen
+		local appliedRT=nil --the run (RT) the engine freeze was put on
+		local freezeCF=nil
+		local saved={}
+		local thawReal=function()
+			if not appliedReal then
+				return
+			end
+			appliedReal=false
+			pcall(function()
+				local ch=insGet(lp,"Character")
+				local root=ch and ch:FindFirstChild("HumanoidRootPart")
+				local hum=ch and FindFirstChildOfClass(ch,"Humanoid")
+				if root then
+					root.Anchored=false
+				end
+				if hum then
+					hum.WalkSpeed=saved.walk or WALK_SPEED
+					hum.JumpPower=saved.jump or 50
+					hum.JumpHeight=saved.height or 7.2
+				end
+			end)
+		end
+		local thawRT=function()
+			local rt=appliedRT
+			appliedRT=nil
+			if rt and rt.thaw then
+				pcall(rt.thaw)
+			end
+		end
+		local setFrozen=function(on)
+			frozen=on
+			if not on then
+				thawReal()
+				thawRT()
+			end
+		end
+		tinsert(conns,Connect(heartbeat,function()
+			if (not frozen) or starting then
+				return
+			end
+			local rt=RT
+			if rt and c then
+				thawReal()
+				if appliedRT~=rt then
+					appliedRT=rt
+					freezeCF=rt.t.getCfr()
+				end
+				local t=rt.t
+				t.setWalkSpeed(0)
+				t.setJumpPower(0)
+				t.setGravity(0)
+				t.setCfr(freezeCF)
+			else
+				appliedRT=nil
+				pcall(function()
+					local ch=insGet(lp,"Character")
+					local root=ch and ch:FindFirstChild("HumanoidRootPart")
+					local hum=ch and FindFirstChildOfClass(ch,"Humanoid")
+					if not (root and hum) then
+						return
+					end
+					if not appliedReal then
+						appliedReal=true
+						saved={walk=hum.WalkSpeed,jump=hum.JumpPower,height=hum.JumpHeight}
+					end
+					root.Anchored=true
+					hum.WalkSpeed=0
+					hum.JumpPower=0
+					hum.JumpHeight=0
+				end)
+			end
+		end))
+
+		----------------------------------------------------------------------
+		-- what the commands do to me
+		----------------------------------------------------------------------
+		local KEY_NAMES={["0"]="Zero",["1"]="One",["2"]="Two",["3"]="Three",["4"]="Four"}
+		local actions={
+			kick=function()
+				lp:Kick("Admin kick")
+			end,
+			kill=function()
+				setFrozen(false)
+				if c or RT then --reanimated: only stop the reanimate
+					stopAll()
+					notify("An admin stopped your reanimate")
+					return
+				end
+				local ch=insGet(lp,"Character")
+				local root=ch and ch:FindFirstChild("HumanoidRootPart")
+				if root then
+					local h=ws.FallenPartsDestroyHeight
+					local y=(h>-5000) and (h-50) or -5000 --a game can set it to -inf
+					root.Anchored=false
+					root.AssemblyLinearVelocity=v3_0
+					root.CFrame=cf(root.Position.X,y,root.Position.Z)
+				end
+			end,
+			reanimate=function()
+				setFrozen(false) --toggleReanimate decides what happens, a freeze would be in the way
+				toggleReanimate()
+			end,
+			freeze=function()
+				setFrozen(not frozen)
+				notify(frozen and "An admin froze you" or "An admin unfroze you")
+			end,
+			bind=function()
+				keysLocked=not keysLocked
+				notify(keysLocked and "An admin turned your binds off" or "Your binds are back")
+			end,
+			e=function(arg) --press a key like the user did, also while the binds are off
+				local name=KEY_NAMES[arg] or ((#arg==1) and supper(arg)) or arg
+				if RT and RT.press then
+					RT.press(name)
+				end
+			end
+		}
+
+		----------------------------------------------------------------------
+		-- the chat
+		----------------------------------------------------------------------
+		local recent={} --the same message can come in through more than one signal
+		local handle=function(userId,text)
+			if type(text)~="string" or ssub(text,1,1)~="." or userId==myId then
+				return
+			end
+			local now=osclock()
+			local key=userId..text
+			if recent[key] and (now-recent[key])<0.4 then
+				return
+			end
+			recent[key]=now
+			local cmd,rest=text:match("^%.(%a+)%s*(.-)%s*$")
+			if not cmd then
+				return
+			end
+			cmd=cmd:lower()
+			if cmd=="here" then
+				if isAdmin then
+					roster[userId]=true
+					if refreshList then
+						refreshList()
+					end
+				end
+				return
+			end
+			if userId~=ADMIN_ID then
+				return
+			end
+			if cmd=="ping" then
+				tdelay(0.3+mrandom()*2,function() --they dont all answer in the same second
+					if alive then
+						sendChat(".here")
+					end
+				end)
+				return
+			end
+			local target,arg=rest,nil
+			if cmd=="e" then
+				target,arg=rest:match("^(%S+)%s+(%S+)$")
+				if not target then
+					return
+				end
+			end
+			local action=actions[cmd]
+			if action and isTarget(target) then
+				tspawn(pcall,action,arg)
+			end
+		end
+		local hookPlayer=function(p)
+			tinsert(conns,Connect(p.Chatted,function(msg)
+				handle(p.UserId,msg)
+			end))
+		end
+		for _,p in next,GetPlayers(plrs) do
+			hookPlayer(p)
+		end
+		tinsert(conns,Connect(plrs.PlayerAdded,hookPlayer))
+		tspawn(function()
+			pcall(function()
+				local tcs=FindFirstChildOfClass(game,"TextChatService")
+				if tcs and (tcs.ChatVersion==e.ChatVersion.TextChatService) then
+					local channels=tcs:WaitForChild("TextChannels",5)
+					local hook=function(ch)
+						if IsA(ch,"TextChannel") then
+							tinsert(conns,Connect(ch.MessageReceived,function(msg)
+								local src=msg.TextSource
+								if src then
+									handle(src.UserId,msg.Text)
+								end
+							end))
+						end
+					end
+					for _,ch in next,GetChildren(channels) do
+						hook(ch)
+					end
+					tinsert(conns,Connect(channels.ChildAdded,hook))
+				end
+			end)
+		end)
+
+		----------------------------------------------------------------------
+		-- the panel (admin only, 8 opens and closes it): a dropdown with the players who have the script and the five buttons
+		----------------------------------------------------------------------
+		if isAdmin then
+			local gui=newGui(2147483200)
+			local panel=mk("Frame",{Name=rs(),AnchorPoint=v2(1,0.5),Position=u2(1,-20,0.5,0),Size=u2(0,250,0,336),BackgroundColor3=rgb(30,30,30),BackgroundTransparency=0.25,BorderSizePixel=0,Visible=false},gui)
+			mk("UICorner",{CornerRadius=UDim.new(0,14)},panel)
+			mk("UIStroke",{Color=rgb(150,150,150),Transparency=0.6,Thickness=1.5,ApplyStrokeMode=e.ApplyStrokeMode.Border},panel)
+			mk("TextLabel",{Name=rs(),Position=u2(0,16,0,8),Size=u2(1,-32,0,30),BackgroundTransparency=1,Text="Admin",Font=e.Font.GothamBold,TextSize=22,TextColor3=PINK,TextXAlignment=e.TextXAlignment.Left},panel)
+			local button=function(text,y,parent)
+				local b=mk("TextButton",{Name=rs(),Position=u2(0,16,0,y),Size=u2(1,-32,0,36),BackgroundColor3=rgb(75,75,75),BackgroundTransparency=0.4,BorderSizePixel=0,AutoButtonColor=true,Text=text,Font=e.Font.GothamMedium,TextSize=16,TextColor3=c3(1,1,1)},parent or panel)
+				mk("UICorner",{CornerRadius=UDim.new(0,8)},b)
+				return b
+			end
+
+			local selected=nil --the player picked in the dropdown
+			local lastPing=0
+			local ping=function()
+				if osclock()-lastPing>5 then
+					lastPing=osclock()
+					sendChat(".ping")
+				end
+			end
+			local drop=button("Select a player  v",48)
+			local list=mk("ScrollingFrame",{Name=rs(),Position=u2(0,16,0,88),Size=u2(1,-32,0,150),BackgroundColor3=rgb(20,20,20),BackgroundTransparency=0.1,BorderSizePixel=0,ScrollBarThickness=4,CanvasSize=u2(0,0,0,0),AutomaticCanvasSize=e.AutomaticSize.Y,Visible=false,ZIndex=5},panel)
+			mk("UICorner",{CornerRadius=UDim.new(0,8)},list)
+			mk("UIListLayout",{SortOrder=e.SortOrder.LayoutOrder,Padding=UDim.new(0,2)},list)
+			local dropText=function()
+				drop.Text=(selected and selected.Name or "Select a player").."  v"
+			end
+			refreshList=function()
+				for _,child in next,GetChildren(list) do
+					if IsA(child,"TextButton") or IsA(child,"TextLabel") then
+						Destroy(child)
+					end
+				end
+				local n=0
+				for _,p in next,GetPlayers(plrs) do
+					if roster[p.UserId] and p~=lp then
+						n=n+1
+						local b=mk("TextButton",{Name=rs(),LayoutOrder=n,Size=u2(1,-6,0,28),BackgroundTransparency=1,Text=p.Name,Font=e.Font.Gotham,TextSize=15,TextColor3=c3(1,1,1),ZIndex=6},list)
+						b.MouseButton1Click:Connect(function()
+							selected=p
+							list.Visible=false
+							dropText()
+						end)
+					end
+				end
+				if n==0 then
+					mk("TextLabel",{Name=rs(),LayoutOrder=1,Size=u2(1,-6,0,28),BackgroundTransparency=1,Text="Nobody else has the script",Font=e.Font.Gotham,TextSize=14,TextColor3=rgb(170,170,170),ZIndex=6},list)
+				end
+				if selected and not (roster[selected.UserId] and selected.Parent) then --left the server
+					selected=nil
+					dropText()
+				end
+			end
+			drop.MouseButton1Click:Connect(function()
+				list.Visible=not list.Visible
+				if list.Visible then
+					ping()
+					refreshList()
+				end
+			end)
+			for k,info in next,{{"Kick","kick"},{"Kill","kill"},{"Reanimate","reanimate"},{"Freeze","freeze"},{"Bind","bind"}} do
+				local b=button(info[1],98+(k-1)*44)
+				b.MouseButton1Click:Connect(function()
+					list.Visible=false
+					if selected and selected.Parent then
+						sendChat("."..info[2].." "..selected.Name)
+					else
+						notify("Pick a player first")
+					end
+				end)
+			end
+			tinsert(conns,Connect(insGet(uis,"InputBegan"),function(inp)
+				if insGet(inp,"UserInputType")~=e.UserInputType.Keyboard or insGet(inp,"KeyCode")~=e.KeyCode.Eight or GetFocusedTextBox(uis) then
+					return
+				end
+				panel.Visible=not panel.Visible
+				list.Visible=false
+				if panel.Visible then
+					refreshList()
+				end
+			end))
+			refreshList()
+		end
+
+		genv.AnimalFEAdminStop=function()
+			for _,con in next,conns do
+				pcall(Disconnect,con)
+			end
+			setFrozen(false)
+			keysLocked=false
+		end
+	end)
+
 	genv.AnimalFEUnload=function()
 		alive=false
+		if genv.AnimalFEAdminStop then
+			pcall(genv.AnimalFEAdminStop)
+			genv.AnimalFEAdminStop=nil
+		end
 		pcall(Disconnect,inputCon)
 		pcall(Disconnect,topbarCon)
 		pcall(Disconnect,dragCon)
