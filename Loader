@@ -316,6 +316,7 @@ local menuUnlock=false --set by the menu while it is open
 local keysLocked=false --set by the admin "bind" command: the script's keys (emotes, modes, faces, custom binds) do nothing until it is run again
 local menuCamCF=nil --the cframe of the menu camera while the menu is open during a reanimate
 local hidedeatheffect=nil
+local chatbubble=nil --set by the "Chat Bubble [Beta]" switch when a reanimate starts: the real head is kept (not left in the void) and hidden inside the head hat
 
 local c=nil
 local cons={}
@@ -485,6 +486,8 @@ local reanimate=function()
 	local pos=cfGet(cfr,"Position")
 	cfr=cfl(pos,pos+cfGet(cfr,"LookVector")*v3_101)
 	local primarypart=nil
+	local chathead=nil --the real head while chatbubble is on, the rest of the real character stays in the void
+	local chatheadoffset=cf(0,0,0.05) --0.05 studs backwards so the head hat is in front of it
 	local shiftlock=false
 	local firstperson=false
 	local xzvel=v3_0
@@ -1105,6 +1108,7 @@ local reanimate=function()
 				return
 			end
 			primarypart=insGet(newc,"PrimaryPart") or hrp
+			chathead=chatbubble and QueryDescendants(newc,">BasePart#Head")[1] or nil
 			if hidedeatheffect and GetCoreGuiEnabled(sg,enumH) then
 				SetCoreGuiEnabled(sg,enumH,false)
 			end
@@ -2089,6 +2093,31 @@ local reanimate=function()
 			end
 		end
 
+		--Chat Bubble [Beta]: the real head is the only real part that does not stay in the void. It sits inside the head hat (a bit further back)
+		--so the chat bubble, which hangs on the head of the character, still shows although the character is dead. waits until the joints are gone,
+		--setting the cframe of a head that is still welded to the torso would pull the whole body out of the void
+		if chathead and IsDescendantOf(chathead,ws) and (insGet(chathead,"ReceiveAge")==0) and not GetJoints(chathead)[1] then
+			local hcf=cfMul(cframes[R6parts.head],chatheadoffset)
+			local hpos=cfGet(hcf,"Position")
+			if novoid and (v3Get(hpos,"Y")<novoid) then
+				hcf=cfAdd(hcf,v3_010*(novoid-v3Get(hpos,"Y")))
+			end
+			local vel1=xzvel+extnow
+			local hvel=nil
+			if vmagnitude(vel1)>25.01 then
+				hvel=vnormalize(vel1)*v3_xzL+v3_net
+			else
+				hvel=vel1*v3_xz+v3_net
+			end
+			if (v3Get(hvel,"X")^2+v3Get(hvel,"Z")^2)<16 then --same as the hats: a head that sits still would get taken over
+				hvel=hvel+alivevel
+			end
+			insSet(chathead,"CanCollide",false)
+			insSet(chathead,"AssemblyLinearVelocity",hvel)
+			insSet(chathead,"CFrame",hcf)
+			insSet(chathead,"AssemblyAngularVelocity",idlerv)
+		end
+
 		setsimrad()
 	end
 
@@ -2328,6 +2357,8 @@ local main=function()
 
 	local HATS_WAIT=4.5 --seconds after each -gh command (10 ids each) of the normal modes
 	local TR_HATS_WAIT=5 --and of the transitioner modes
+	--on mobile every wait between the hat commands (-ch and each -gh) is this much longer, the commands arrive slower there
+	local MOBILE_HATS_EXTRA=(insGet(uis,"TouchEnabled") and not insGet(uis,"KeyboardEnabled")) and 2 or 0
 
 	--cuts a list of asset ids into -gh commands of 10 ids each (the ids are separated by commas)
 	local gh=function(list)
@@ -2752,6 +2783,7 @@ local main=function()
 		autoPd=false, --fire -pd too when reanimating
 		originalNeko=false, --the Original Neko hats (modeName originalneko) with the animations and keys of nekov4.lua instead of the emotes
 		moreEmotes=false, --the emote tools of Catware Anims (made after reanimating), see poses.emotes
+		chatBubble=false, --keep the real head (hidden in the head hat) so the chat bubble shows while dead, see chatbubble in the engine
 		binds={}, --custom command id -> name of the key
 		stats={reanimations=0,hats=0,usage=0} --usage is in seconds, all sessions together
 	}
@@ -2772,6 +2804,7 @@ local main=function()
 					DATA.autoPd=(saved.autoPd==true)
 					DATA.originalNeko=(saved.originalNeko==true)
 					DATA.moreEmotes=(saved.moreEmotes==true)
+					DATA.chatBubble=(saved.chatBubble==true)
 					if type(saved.topbar)=="table" and tonumber(saved.topbar.x) and tonumber(saved.topbar.y) then
 						DATA.topbar={x=tonumber(saved.topbar.x),y=tonumber(saved.topbar.y)}
 					end
@@ -2948,9 +2981,9 @@ local main=function()
 		updateStats()
 		notify("Loading "..text.." hats")
 		tspawn(function()
-			local wait=MODES[name].delay or HATS_WAIT
+			local wait=(MODES[name].delay or HATS_WAIT)+MOBILE_HATS_EXTRA
 			fireCmd("-ch")
-			twait(0.1)
+			twait(0.1+MOBILE_HATS_EXTRA)
 			--10 ids per command
 			for _,cmd in next,hatCommands(MODES[name]) do
 				fireCmd("-gh "..cmd)
@@ -3878,6 +3911,7 @@ local main=function()
 			end
 			setRigAligns()
 
+			chatbubble=DATA.chatBubble==true
 			local t=reanimate()
 			if type(t)~="table" then
 				return
@@ -5292,6 +5326,7 @@ local main=function()
 		end
 		refreshOgLines()
 		toggleRow("More Emotes","moreEmotes") --no lines for the emotes, they are tools that show up after reanimating
+		toggleRow("Chat Bubble [Beta]","chatBubble") --takes effect the next time you reanimate
 		miscLine("",6)
 		miscLine("Custom",22,PINK,e.Font.GothamBold)
 		for _,cmd in next,CUSTOM do
